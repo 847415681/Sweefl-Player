@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation android:name="com.sweefl.player.networktest.NetworkContractInstrumentation"
+        android:targetPackage="com.sweefl.player" />
+</manifest>

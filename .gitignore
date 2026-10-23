@@ -1,0 +1,27 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+*.iml
+*.jks
+*.keystore
+dist/
+docs/device-test/*.xml
+docs/screenshots/*-ui.xml
+**/__pycache__/
+*.pyc
+docs/testing-*/*.xml
+docs/testing-*/baseline/*.xml
+# Device evidence may contain preferences, history, identifiers and private media names.
+docs/testing*/
+docs/device-test/
+docs/screenshots/
+*.rgb
+*.mp4
+*.apk
+*.log
+*.jsonl
+# Keep authored research reports, not raw device dumps or downloaded pages.
+docs/research/*
+!docs/research/*.md

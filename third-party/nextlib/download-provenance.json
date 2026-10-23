@@ -1,0 +1,29 @@
+{
+  "sources": [
+    {
+      "file": "archives/ffmpeg-6.0.tar.gz",
+      "requested_url": "https://ffmpeg.org/releases/ffmpeg-6.0.tar.gz",
+      "bytes": 15428402,
+      "sha256": "f4ccf961403752c93961927715f524576d1f4dd02cd76d8c76aed3bbe6686656"
+    },
+    {
+      "file": "archives/libvpx-v1.13.0.tar.gz",
+      "requested_url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.13.0.tar.gz",
+      "bytes": 5515327,
+      "sha256": "cb2a393c9c1fae7aba76b950bb0ad393ba105409fe1a147ccd61b0aaa1501066"
+    },
+    {
+      "file": "archives/mbedtls-v3.4.1.tar.gz",
+      "requested_url": "https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.4.1.tar.gz",
+      "bytes": 4949378,
+      "sha256": "a420fcf7103e54e775c383e3751729b8fb2dcd087f6165befd13f28315f754f5"
+    },
+    {
+      "file": "archives/nextlib-1b69e9490c172c42f73f7a6f1b9ffd1c8be4a060.tar.gz",
+      "requested_url": "https://github.com/anilbeesetti/nextlib/archive/1b69e9490c172c42f73f7a6f1b9ffd1c8be4a060.tar.gz",
+      "bytes": 90387,
+      "sha256": "0e03c22d59dccd996d9c3ac1c5ffaa26ac85de49b2f0af07c06fee2846341343"
+    }
+  ],
+  "errors": []
+}
