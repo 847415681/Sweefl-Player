@@ -6,6 +6,15 @@ import com.sweefl.player.playback.diagnostics.PlaybackDiagnosticsState
 
 /** Narrow host contract: player UI never depends on the exported Activity class. */
 interface PlayerHost {
+    val onlineMedia: com.sweefl.player.core.model.ResolvedOnlineMedia?
+    val sourceLoading: Boolean
+    val sourceError: String?
+    fun clearSourceError()
+    fun playbackTimeline(): com.sweefl.player.core.model.PlaybackTimeline
+    fun selectEpisode(pageUrl: String)
+    fun selectQuality(qualityId: Int)
+    fun selectAudio(audioId: String)
+    fun goLive()
     val inPip: Boolean
     val decodeMode: String
     val subtitleName: String?

@@ -17,5 +17,6 @@ class AppContainer(context: Context) {
     internal val playbackConfig = PlaybackConfigStore(context.applicationContext)
     val videos: VideoRepository = MediaStoreVideoRepository(context.applicationContext)
     val thumbnails = VideoThumbnailLoader(context.applicationContext)
+    val onlineMediaResolver: com.sweefl.player.core.model.OnlineMediaResolver = com.sweefl.player.data.online.BilibiliMediaResolver()
     val playerEngines = PlayerEngineFactory(context.applicationContext) { settings.networkPlayback }
 }

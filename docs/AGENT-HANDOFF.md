@@ -1,12 +1,16 @@
-# Agent 交接：Sweefl Player r42
+# Agent 交接：Sweefl Player r43
 
 更新：2026-10-25。本文件是新 agent 的入口；先读本页，再读[开发指南](DEVELOPMENT.md)、[架构指南](ARCHITECTURE.md)、[r42 性能说明](DIALOG-PERFORMANCE-r42.md)和[r41 连续性说明](GLASS-CONTINUITY-r41.md)。用户已要求将完整修复和文档提交到指定 GitHub 仓库。
 
 ## 当前状态与用户要求
 
-当前应用为 0.3.2 / versionCode 6，r42 是交付标识。新增大弹窗性能优化已完成构建和真机验证；12% 模糊的弹窗绘制速率约 9.44 → 39.77 次/秒、P95 21 → 15ms，独立录像确认背景变化增多。优化 Release 留在手机，用户偏好与音量、旋转恢复。不要自动开始新功能，先接收用户的新任务。
+当前应用为 0.3.2 / versionCode 6，r43 是交付标识。新增 Bilibili 视频/番剧/直播解析、按能力选集/清晰度/音轨、服务器时移与稳定页面历史恢复，详见 [Bilibili 实现与验证](BILIBILI.md)。构建及限定设备验证包括真实点播分 P、画质/音轨切换、直播一小时范围回看、暂停/继续、换画质保持内容、旋转与后台恢复、官方登录入口返回。不要自动开始新功能，先接收用户的新任务。
 
-最新改动是 DialogBackdrop 显示对齐调度、静止场景去重，以及 LiquidGlass 的模糊背景层缩放。物理模糊半径达到 4px 才使用半宽半高，零模糊保留完整细节，文字与锐利边缘不缩小。不得把下层 Window 缓存为静态 UI，也不得把可复用的视频位图直接交给工作线程。详见 r42 说明。
+在线源经 AppContainer 注入，播放器仍属于 Activity 会话。不得把 CDN 地址或 Cookie 写入历史；保持初次分享别名到稳定页的历史/配置恢复、失败请求与生命周期待续请求的分离、旧播放器自动恢复避让新选择。VOD/PGC 用 Desktop UA/根 Referer 及 API 提供的优选非 P2P 地址，Live 保留独立请求契约。DVR 是正 `tmshift` 历史流，不是扩大的播放器缓存；无 PDT 时不能宣称逐帧墙钟准确。
+
+r42 大弹窗性能优化保持：12% 模糊的弹窗绘制速率约 9.44 → 39.77 次/秒、P95 21 → 15ms，独立录像确认背景变化增多。用户偏好与音量、旋转由保护脚本恢复。
+
+r42 的改动是 DialogBackdrop 显示对齐调度、静止场景去重，以及 LiquidGlass 的模糊背景层缩放。物理模糊半径达到 4px 才使用半宽半高，零模糊保留完整细节，文字与锐利边缘不缩小。不得把下层 Window 缓存为静态 UI，也不得把可复用的视频位图直接交给工作线程。详见 r42 说明。
 
 r41 曾修复“实时折射关闭”时图标隐藏但点击区域保留的问题；组合与绘制共用 `glassContentReady`。用户原始玻璃开关为关闭，测试结束已恢复，不能强制打开以掩盖回归。
 
@@ -70,7 +74,9 @@ r41 基线已通过完整构建、单测、lint；三渲染路径的暂停跳转
 
 ## 交付与接手动作
 
-r42 APK SHA-256：`5f2c54144f32df169d351517f7448e619e22a28031c0f1f20ab221da7c93f2d0`。本次验证范围及性能对照见 [r42 说明](DIALOG-PERFORMANCE-r42.md)，源包哈希以本地交付清单为准，GitHub 提交以 `git log -1` 和交付回复为准。CI 显式安装 `platform-tools`，修复 `setup-android@v3` 默认请求废弃 `tools` 包的问题。
+r43 APK SHA-256：`b4542085a9b03a1d631d7dbbe1a1ddcc94c713497fe16531b56fae35784eea4d`。本次功能与验证范围见 [Bilibili 说明](BILIBILI.md)；源码包哈希以本地交付清单为准，最终 GitHub 提交以 `git log -1` 和交付回复为准。开发签名保持兼容，签名材料不进入源码包。
+
+历史 r42 APK SHA-256：`5f2c54144f32df169d351517f7448e619e22a28031c0f1f20ab221da7c93f2d0`。本次验证范围及性能对照见 [r42 说明](DIALOG-PERFORMANCE-r42.md)，源包哈希以本地交付清单为准，GitHub 提交以 `git log -1` 和交付回复为准。CI 显式安装 `platform-tools`，修复 `setup-android@v3` 默认请求废弃 `tools` 包的问题。
 
 历史 r41 APK SHA-256：`c2a8086a84899c93ebadb1a052e9fd06916fc6268421f6977df24f2528dd5676`；源包 SHA-256：`07ee1b3e0becfbb364a9c748552135bc0919d09e7fd3a0daa33fd3666ec4ba29`。
 

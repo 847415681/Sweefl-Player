@@ -30,6 +30,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
 class PlayerActivity : ComponentActivity(), PlayerHost {
     private lateinit var session: PlaybackSession
@@ -37,10 +44,30 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
     private val documents by lazy { DocumentAccess(this) }
     private val windowController by lazy { PlayerWindowController(this) }
     private var pickingSubtitle = false
+    private var openingBilibiliLogin = false
+    private val bilibiliLogin = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        openingBilibiliLogin = false
+        updatePipParams()
+        if (::session.isInitialized) session.retryPlayback()
+    }
+    private fun openBilibiliLogin() {
+        openingBilibiliLogin = true
+        updatePipParams()
+        bilibiliLogin.launch(Intent(this, com.sweefl.player.feature.network.BilibiliLoginActivity::class.java))
+    }
     override var inPip by mutableStateOf(false)
         private set
     override val decodeMode get() = session.decodeMode
     override val subtitleName get() = session.subtitleName
+    override val onlineMedia get() = session.onlineMedia
+    override val sourceLoading get() = session.sourceLoading
+    override val sourceError get() = session.sourceError
+    override fun clearSourceError() = session.clearSourceError()
+    override fun playbackTimeline() = session.playbackTimeline()
+    override fun selectEpisode(pageUrl: String) = session.selectEpisode(pageUrl)
+    override fun selectQuality(qualityId: Int) = session.selectQuality(qualityId)
+    override fun selectAudio(audioId: String) = session.selectAudio(audioId)
+    override fun goLive() = session.goLive()
     override fun glassFrameRevision() = session.glassFrameRevision()
     override fun seekTo(positionMs: Long) = session.seekTo(positionMs)
     override fun seekBasePosition() = session.seekBasePosition()
@@ -73,6 +100,7 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
         try {
             PlaybackConfig.validateMediaUri(uri.toString())
             val store = container.playbackConfig
+            val settingsIdentity = savedInstanceState?.getString("onlinePageUrl") ?: uri.toString()
             val mediaMime = com.sweefl.player.domain.normalizeStreamMime(intent.type ?: store.mimeType(uri.toString()))
             if (intent.type != null) store.saveMimeType(uri.toString(), mediaMime)
             val userAgent = PlaybackConfig.validateUserAgent(if (intent.hasExtra(PlaybackConfig.EXTRA_USER_AGENT))
@@ -87,15 +115,18 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
             session = PlaybackSession(applicationContext, uri, mediaMime, intent.getStringExtra("title") ?: documents.displayName(uri),
                 userAgent, mode, container.history, container.playerEngines, savedInstanceState,
                 debug && intent.getBooleanExtra(PlaybackConfig.EXTRA_DIAGNOSTICS, false), benchmark, ::onPlaybackChanged,
-                initialSubtitleOffsetMs = store.subtitleOffsetMs(uri.toString()),
-                persistSubtitleOffsetMs = { store.saveSubtitleOffsetMs(uri.toString(), it) },
-                initialRenderSettings = store.renderSettings(uri.toString()),
-                persistRenderSettings = { store.saveRenderSettings(uri.toString(), it) })
+                initialSubtitleOffsetMs = store.subtitleOffsetMs(settingsIdentity),
+                persistSubtitleOffsetMs = { store.saveSubtitleOffsetMs(session.sourceIdentity, it) },
+                initialRenderSettings = store.renderSettings(settingsIdentity),
+                persistRenderSettings = { store.saveRenderSettings(session.sourceIdentity, it) },
+                onlineResolver = container.onlineMediaResolver,
+                readSubtitleOffsetMs = store::subtitleOffsetMs, readRenderSettings = store::renderSettings)
         } catch (failure: IllegalArgumentException) {
             Toast.makeText(this, failure.message, Toast.LENGTH_LONG).show()
             finish(); return
         }
         pickingSubtitle = savedInstanceState?.getBoolean("pickingSubtitle", false) ?: false
+        openingBilibiliLogin = savedInstanceState?.getBoolean("openingBilibiliLogin", false) ?: false
         DeviceCapabilities.collectOnce(this)
         setContent {
             val glass = rememberGlassEnabled(container.settings)
@@ -106,14 +137,28 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
                 com.sweefl.player.feature.settings.NetworkPlaybackPreferencesProvider(container.settings) {
                 com.sweefl.player.feature.settings.GlassRefreshPreferencesProvider(container.settings) {
                 SweeflTheme {
-                    session.player?.let { engine -> key(engine) {
+                    val engine = session.player
+                    if (engine == null) {
+                        Box(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding(), contentAlignment = Alignment.Center) {
+                            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                if (session.sourceLoading) CircularProgressIndicator()
+                                Text(session.sourceError ?: "正在获取播放地址…", color = Color.White)
+                                if (session.sourceError != null) {
+                                    Button(onClick = { session.retryPlayback() }) { Text("重试") }
+                                    TextButton(onClick = { openBilibiliLogin() }) { Text("B站官方登录") }
+                                }
+                                TextButton(onClick = { finish() }) { Text("返回") }
+                            }
+                        }
+                    } else key(engine) {
                         val previewHost = com.sweefl.player.feature.player.ui.rememberSeekPreviewHost(
-                            session.previewSource, enabled = interactions.showSeekPreview && !inPip)
+                            session.previewSource, enabled = interactions.showSeekPreview && !inPip && session.onlineMedia?.live == null)
                         PlayerScreen(engine, session.title, this, windowController,
                             onGlassChanged = { container.settings.glassEnabled = it },
                             preview = { target -> com.sweefl.player.feature.player.ui.SeekPreview(previewHost, target) },
                             onSave = session::saveProgress)
-                    } }
+                    }
                 }
                 }
                 }
@@ -157,7 +202,7 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
             (size.width.toFloat() * size.pixelWidthHeightRatio / size.height).coerceIn(1f / 2.39f, 2.39f) else 16f / 9f
         return PictureInPictureParams.Builder().setAspectRatio(Rational((ratio * 10_000).toInt().coerceIn(4_185, 23_900), 10_000)).apply {
             if (Build.VERSION.SDK_INT >= 31) {
-                setAutoEnterEnabled(session.player?.isPlaying == true && !pickingSubtitle)
+                setAutoEnterEnabled(session.player?.isPlaying == true && !pickingSubtitle && !openingBilibiliLogin)
                 setSeamlessResizeEnabled(true)
             }
         }.build()
@@ -169,14 +214,14 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
     }
 
     override fun enterPip(): Boolean {
-        if (isFinishing || !::session.isInitialized || session.player == null || pickingSubtitle || !packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
+        if (isFinishing || !::session.isInitialized || session.player == null || pickingSubtitle || openingBilibiliLogin || !packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
         if (isInPictureInPictureMode) return true
         return runCatching { enterPictureInPictureMode(pipParams()) }.getOrDefault(false)
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (::session.isInitialized && session.player?.isPlaying == true && !pickingSubtitle && Build.VERSION.SDK_INT < 31) enterPip()
+        if (::session.isInitialized && session.player?.isPlaying == true && !pickingSubtitle && !openingBilibiliLogin && Build.VERSION.SDK_INT < 31) enterPip()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -192,15 +237,16 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
     override fun onSaveInstanceState(outState: Bundle) {
         if (::session.isInitialized) session.saveState(outState)
         outState.putBoolean("pickingSubtitle", pickingSubtitle)
+        outState.putBoolean("openingBilibiliLogin", openingBilibiliLogin)
         super.onSaveInstanceState(outState)
     }
     override fun onStop() {
-        if (::session.isInitialized) session.stop(pickingSubtitle, isChangingConfigurations)
+        if (::session.isInitialized) session.stop(pickingSubtitle || openingBilibiliLogin, isChangingConfigurations)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onStop()
     }
     override fun onDestroy() {
-        if (::session.isInitialized) session.releasePlayer()
+        if (::session.isInitialized) session.close()
         super.onDestroy()
     }
 

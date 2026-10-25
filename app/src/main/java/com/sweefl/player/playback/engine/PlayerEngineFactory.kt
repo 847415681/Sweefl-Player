@@ -18,7 +18,8 @@ import com.sweefl.player.domain.PlaybackConfig
 class PlayerEngineFactory(private val context: Context,
     private val networkSettings: () -> com.sweefl.player.domain.NetworkPlaybackSettings = { com.sweefl.player.domain.NetworkPlaybackSettings() }) {
     fun create(userAgent: String?, decodeMode: String, subtitles: com.sweefl.player.playback.subtitles.ExternalSubtitleSync? = null,
-        rendering: com.sweefl.player.playback.rendering.PlaybackRenderingPipeline? = null): ExoPlayer {
+        rendering: com.sweefl.player.playback.rendering.PlaybackRenderingPipeline? = null,
+        onlineMedia: com.sweefl.player.core.model.ResolvedOnlineMedia? = null): ExoPlayer {
         val renderers = (when {
             subtitles != null && rendering != null -> com.sweefl.player.playback.rendering.MainRenderersFactory(context, subtitles, rendering, decodeMode)
             subtitles != null -> com.sweefl.player.playback.subtitles.ExternalSubtitleRenderersFactory(context, subtitles)
@@ -33,19 +34,28 @@ class PlayerEngineFactory(private val context: Context,
                 MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling).filter { it.name in softwareNames }
             }
         }
-        val http = DefaultHttpDataSource.Factory().setUserAgent(userAgent ?: PlaybackConfig.DEFAULT_USER_AGENT)
+        val headers = playbackRequestHeaders(onlineMedia?.requestHeaders.orEmpty())
+        val http = DefaultHttpDataSource.Factory()
+            .setUserAgent(headers["User-Agent"] ?: onlineMedia?.userAgent ?: userAgent ?: PlaybackConfig.DEFAULT_USER_AGENT)
+            .setDefaultRequestProperties(headers)
             .setConnectTimeoutMs(8000).setReadTimeoutMs(8000)
         // Immutable snapshot per engine: changing preferences never disrupts active requests.
         val settings = networkSettings().normalized()
         val parallelHttp = com.sweefl.player.playback.network.ParallelHttpDataSource.Factory(http, settings.threads)
-        val data = DefaultDataSource.Factory(context, parallelHttp)
+        val dvrRoot = onlineMedia?.takeIf { it.live != null &&
+            (it.video.mimeType.equals("application/x-mpegURL", true) ||
+                it.video.mimeType.equals("application/vnd.apple.mpegurl", true)) }?.video?.url
+        val upstream = if (dvrRoot == null) parallelHttp
+            else HlsDvrDataSourceFactory(parallelHttp, HlsDvrUriPolicy(dvrRoot))
+        val data = DefaultDataSource.Factory(context, upstream)
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(settings.bufferDurationMs, settings.bufferDurationMs, 1000, 2500)
             .setTargetBufferBytes(com.sweefl.player.domain.NetworkPlaybackSettings.TARGET_BUFFER_BYTES)
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
-        val sources = if (subtitles == null) DefaultMediaSourceFactory(data)
+        val baseSources = if (subtitles == null) DefaultMediaSourceFactory(data)
             else com.sweefl.player.playback.subtitles.SubtitleMediaSourceFactory(data, subtitles)
+        val sources = onlineMedia?.let { OnlineMediaSourceFactory(baseSources, it) } ?: baseSources
         return ExoPlayer.Builder(context, renderers).setMediaSourceFactory(sources).setLoadControl(loadControl).build().apply {
             subtitles?.bind(this)
             rendering?.bind(this)

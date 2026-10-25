@@ -22,6 +22,7 @@ internal class PlaybackDiagnostics(
     private val writeSnapshots: Boolean,
     private val onFrameScheduled: (Long, Long) -> Unit = { _, _ -> },
     private val renderingState: () -> Pair<com.sweefl.player.domain.PlaybackRenderSettings, com.sweefl.player.domain.PlaybackRenderStatus>? = { null },
+    private val sourceState: () -> Map<String, Any?> = { emptyMap() },
     private val onSnapshot: (PlaybackDiagnosticsState) -> Unit
 ) : AnalyticsListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -55,8 +56,10 @@ internal class PlaybackDiagnostics(
                 )
                 onSnapshot(state)
                 if (writeSnapshots) {
+                    val online = sourceState().toMap()
                     val json = JSONObject().apply {
                         put("schemaVersion", 1)
+                        put("online", if (online.isEmpty()) JSONObject.NULL else JSONObject(online))
                         put("rendering", renderingState()?.let { (settings, status) -> JSONObject().apply {
                             put("requestedMode", settings.mode.name)
                             put("brightness", settings.brightness); put("contrast", settings.contrast); put("saturation", settings.saturation)
@@ -93,7 +96,8 @@ internal class PlaybackDiagnostics(
                             JSONObject().put("selected", group.isSelected).put("format", group.getTrackFormat(0).toString())
                         }))
                         put("errorDetail", engine.playerError?.let { failure ->
-                            generateSequence<Throwable>(failure) { it.cause }.take(5).joinToString(" -> ") { it.toString() }.take(2500)
+                            val detail = generateSequence<Throwable>(failure) { it.cause }.take(5).joinToString(" -> ") { it.toString() }
+                            (if (online.isEmpty()) detail else diagnosticHttpUrl.replace(detail, "[redacted URL]")).take(2500)
                         } ?: JSONObject.NULL)
                     }.toString(2)
                     withContext(Dispatchers.IO) { runCatching { atomicWrite(File(context.filesDir, "diagnostics.json"), json) } }
@@ -116,6 +120,8 @@ internal class PlaybackDiagnostics(
         engine.removeAnalyticsListener(this)
     }
 }
+
+private val diagnosticHttpUrl = Regex("""https?://[^\s<>"']+""", RegexOption.IGNORE_CASE)
 
 private fun formatJson(format: Format?): JSONObject? = format?.let {
     JSONObject().apply {

@@ -13,6 +13,10 @@
         android:theme="@style/Theme.Sweefl"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true">
+        <activity
+            android:name=".feature.network.BilibiliLoginActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

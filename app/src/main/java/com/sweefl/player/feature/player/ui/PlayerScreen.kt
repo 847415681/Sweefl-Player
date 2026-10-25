@@ -14,11 +14,15 @@ import com.sweefl.player.core.designsystem.GlassDialog as AlertDialog
 import com.sweefl.player.domain.DoubleTapAction
 import com.sweefl.player.feature.settings.LocalPlaybackInteractions
 import com.sweefl.player.feature.settings.PlaybackInteractionDialog
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.sweefl.player.core.designsystem.glass
 import com.sweefl.player.domain.formatDuration
-import com.sweefl.player.domain.seekPosition
 import com.sweefl.player.feature.player.PlayerHost
 import com.sweefl.player.feature.player.platform.PlayerWindowController
 
@@ -56,10 +60,21 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
     var controls by remember { mutableStateOf(true) }
     var playing by remember { mutableStateOf(player.isPlaying) }
     var buffering by remember { mutableStateOf(true) }
-    var position by remember { mutableLongStateOf(player.currentPosition) }
-    var duration by remember { mutableLongStateOf(0L) }
+    var timeline by remember(player, host) { mutableStateOf(host.playbackTimeline()) }
+    val position = timeline.positionMs
+    val duration = timeline.durationMs
+    var scrubOrigin by remember { mutableLongStateOf(0L) }
+    var scrubDuration by remember { mutableLongStateOf(0L) }
+    var sliderRangeHeld by remember { mutableStateOf(false) }
+    val media = host.onlineMedia
     var error by remember { mutableStateOf<String?>(null) }
     var tracks by remember { mutableStateOf(player.currentTracks) }
+    val videoChoices = remember(tracks) { supportedTrackChoices(tracks, C.TRACK_TYPE_VIDEO) }
+    val audioChoices = remember(tracks) { supportedTrackChoices(tracks, C.TRACK_TYPE_AUDIO) }
+    val hasEpisodes = (media?.episodes?.distinctBy { it.pageUrl }?.size ?: 0) > 1
+    val hasQuality = (media?.qualities?.distinctBy { it.id }?.size ?: videoChoices.size) > 1
+    val hasAudio = (if (usesResolvedAudioSelection(media))
+        media?.audios?.distinctBy { it.id }?.size ?: 0 else audioChoices.size) > 1
     var dialog by remember { mutableStateOf<String?>(null) }
     var speed by remember(player) { mutableFloatStateOf(player.playbackParameters.speed) }
     var fill by remember { mutableStateOf(false) }
@@ -113,7 +128,7 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED || state == Player.STATE_IDLE) endHold()
                 buffering = state == Player.STATE_BUFFERING
-                duration = player.duration.coerceAtLeast(0)
+                timeline = host.playbackTimeline()
                 if (state == Player.STATE_ENDED) { controls = true; onSave() }
                 if (state == Player.STATE_READY) error = null
             }
@@ -133,7 +148,7 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
         player.addListener(listener)
         playing = player.isPlaying
         buffering = player.playbackState == Player.STATE_BUFFERING
-        duration = player.duration.coerceAtLeast(0)
+        timeline = host.playbackTimeline()
         tracks = player.currentTracks
         player.playerError?.let(listener::onPlayerError)
         onDispose { endHold(); player.removeListener(listener) }
@@ -141,19 +156,16 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
     LaunchedEffect(player, controls, inPip, playing) {
         var savedAt = android.os.SystemClock.elapsedRealtime()
         while (true) {
-            if (controls && !inPip) {
-                position = player.currentPosition.coerceAtLeast(0)
-                duration = player.duration.coerceAtLeast(0)
-            }
+            timeline = host.playbackTimeline()
             val now = android.os.SystemClock.elapsedRealtime()
             if (playing && now - savedAt >= 10_000) { onSave(); savedAt = now }
             delay(if (controls && !inPip && playing) 500 else 2000)
         }
     }
-    LaunchedEffect(controls, playing, scrubbing, dialog, locked, gestureActive) {
-        if (controls && playing && !scrubbing && dialog == null && !locked && !gestureActive && !keepControls) { delay(4500); controls = false }
+    LaunchedEffect(controls, playing, scrubbing, sliderRangeHeld, dialog, locked, gestureActive) {
+        if (controls && playing && !scrubbing && !sliderRangeHeld && dialog == null && !locked && !gestureActive && !keepControls) { delay(4500); controls = false }
     }
-    LaunchedEffect(hint, gestureActive) { if (hint != null && !gestureActive) { delay(1200); hint = null } }
+    LaunchedEffect(hint, gestureActive) { if (hint != null && !gestureActive) { delay(if (hint == media?.notice) 3500 else 1200); hint = null } }
     LaunchedEffect(controls, locked, inPip) {
         if (!inPip) window.showSystemBars(controls && !locked)
     }
@@ -177,9 +189,10 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
     }
     fun seek(delta: Long) {
         endHold()
-        if (duration <= 0 || !player.isCurrentMediaItemSeekable) { hint = "当前视频不可调整进度"; return }
-        host.seekTo(seekPosition(host.seekBasePosition(), delta, duration))
-        position = player.currentPosition
+        val range = host.playbackTimeline()
+        if (!range.seekable || range.durationMs <= 0) { hint = "当前视频不可调整进度"; return }
+        host.seekTo(range.clamp(host.seekBasePosition() + delta))
+        timeline = host.playbackTimeline()
         hint = "${if (delta > 0) "+" else "−"}${kotlin.math.abs(delta) / 1000} 秒"
     }
     fun togglePlayback() {
@@ -187,27 +200,41 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
         host.togglePlayback()
     }
     fun finishScrub(commit: Boolean) {
-        if (scrubbing && commit && player.isCurrentMediaItemSeekable && player.duration > 0) {
-            val target = scrub.toLong().coerceIn(0, player.duration)
-            host.seekTo(target); position = target
+        val range = host.playbackTimeline()
+        if (scrubbing && commit && range.seekable && range.durationMs > 0) {
+            host.seekTo(range.clamp(scrubOrigin + scrub.toLong()))
+            timeline = host.playbackTimeline()
         }
         scrubbing = false
     }
+    fun timeLabel(target: Long): String = if (timeline.isLive) {
+        val behind = (timeline.endMs - target).coerceAtLeast(0L)
+        if ((!scrubbing && timeline.atLiveEdge && target == position) || behind < 2_000L) "直播" else "−${formatDuration(behind)}"
+    } else formatDuration((target - timeline.startMs).coerceAtLeast(0L))
+    LaunchedEffect(player, media?.pageUrl, media?.selectedVideoId, timeline.isLive) {
+        endHold(); scrubbing = false; gestureActive = false
+        timeline = host.playbackTimeline()
+    }
+    LaunchedEffect(media?.notice) { media?.notice?.let { hint = it; controls = true } }
+    LaunchedEffect(hasEpisodes, hasQuality, hasAudio) {
+        if ((dialog == "episodes" && !hasEpisodes) || (dialog == "quality" && !hasQuality) ||
+            (dialog == "audio" && !hasAudio)) dialog = null
+    }
     val timeStyle = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
     val timeMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    val timeTemplate = if (duration > 0) formatDuration(duration.coerceAtLeast(3_599_000L))
+    val timeTemplate = (if (timeline.isLive) "−" else "") + if (duration > 0) formatDuration(duration.coerceAtLeast(3_599_000L))
         .map { if (it.isDigit()) '8' else it }.joinToString("") else "88:88:88"
     val timeLabelWidth = with(androidx.compose.ui.platform.LocalDensity.current) {
         timeMeasurer.measure(timeTemplate, style = timeStyle, maxLines = 1, softWrap = false).size.width.toDp() + 2.dp
     }
     VideoGlassProvider(videoView?.videoSurfaceView as? SurfaceView, playing,
-        active = !inPip && foreground && (controls || scrubbing || holdSpeed != null || dialog != null || hint != null || host.opticalSeekHandoff.running), enabled = glass,
+        active = !inPip && foreground && (controls || scrubbing || holdSpeed != null || dialog != null || hint != null || host.sourceLoading || host.sourceError != null || host.opticalSeekHandoff.running), enabled = glass,
         videoWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).toInt(), videoHeight = videoSize.height, contentRevision = glassContentRevision,
         videoFrameToken = host::presentedFrameToken, videoFrameRevision = host::glassFrameRevision, buffering = buffering, handoff = host.opticalSeekHandoff,
         videoExpected = !(player.playbackState == Player.STATE_READY && !player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO))) {
     val opticalReady by com.sweefl.player.core.designsystem.LocalGlassReady.current
     val revealControls = opticalReady
-    val loading = buffering || host.opticalSeekHandoff.running
+    val loading = buffering || host.opticalSeekHandoff.running || host.sourceLoading
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { context -> PlayerView(context).apply { this.player = player; useController = false; videoView = this } },
             modifier = Modifier.fillMaxSize(),
@@ -230,9 +257,14 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
                     action == DoubleTapAction.LOCK -> { locked = true; endHold(); controls = false }
                 }
             }, onActive = { gestureActive = it }, onHint = { hint = it },
-            onSeekStart = { gestureScrub = true; scrubbing = true; scrub = it.toFloat(); hint = null },
-            onSeekChange = { scrub = it.toFloat(); hint = if (interactions.showSeekPreview) null else "定位 ${formatDuration(it)}" },
-            onSeekEnd = ::finishScrub)
+            onSeekStart = { target, range ->
+                gestureScrub = true; scrubbing = true
+                scrubOrigin = range.startMs; scrubDuration = range.durationMs
+                scrub = (target - scrubOrigin).toFloat(); hint = null
+            },
+            onSeekChange = { scrub = (it - scrubOrigin).toFloat(); hint = if (interactions.showSeekPreview) null else "定位 ${timeLabel(it)}" },
+            onSeekEnd = ::finishScrub, timeline = host::playbackTimeline, seekBasePosition = host::seekBasePosition,
+            sourceKey = Triple(media?.pageUrl, media?.selectedVideoId, timeline.isLive))
         if (loading && !inPip && (!controls || !revealControls || scrubbing || locked || holdSpeed != null))
             CircularProgressIndicator(Modifier.align(Alignment.Center), color = Mint)
         if (locked && controls && !inPip) IconButton(onClick = { locked = false; controls = true },
@@ -261,23 +293,56 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
                 IconButton(onClick = { seek(10_000) }, modifier = Modifier.size(52.dp)) { Icon(Icons.Rounded.Forward10, "快进 10 秒") }
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
-                if (scrubbing && interactions.showSeekPreview && !player.isCurrentMediaItemLive) {
-                    Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)) { preview(scrub.toLong()) }
+                if (scrubbing && interactions.showSeekPreview && !timeline.isLive && media?.live == null) {
+                    Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)) { preview(scrubOrigin + scrub.toLong()) }
                 }
                 GlassSurface(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 640.dp).fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(formatDuration(if (scrubbing) scrub.toLong() else position), Modifier.width(timeLabelWidth),
+                    Text(timeLabel(if (scrubbing) scrubOrigin + scrub.toLong() else position), Modifier.width(timeLabelWidth),
                         style = timeStyle, textAlign = androidx.compose.ui.text.style.TextAlign.End, maxLines = 1)
-                    Slider(value = if (scrubbing) scrub else position.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),
-                        onValueChange = { endHold(); if (!scrubbing) gestureScrub = false; scrubbing = true; scrub = it },
+                    Slider(value = if (scrubbing) scrub.coerceIn(0f, scrubDuration.toFloat().coerceAtLeast(1f))
+                        else if (sliderRangeHeld) (position - scrubOrigin).coerceIn(0L, scrubDuration).toFloat()
+                        else (timeline.clamp(position) - timeline.startMs).toFloat(),
+                        onValueChange = {
+                            endHold()
+                            if (!scrubbing) {
+                                gestureScrub = false
+                                if (!sliderRangeHeld) {
+                                    scrubOrigin = timeline.startMs; scrubDuration = timeline.durationMs
+                                }
+                            }
+                            scrubbing = true; scrub = it
+                        },
                         onValueChangeFinished = { finishScrub(true) },
-                        valueRange = 0f..duration.toFloat().coerceAtLeast(1f), enabled = duration > 0 && player.isCurrentMediaItemSeekable,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                    Text(formatDuration(duration), Modifier.width(timeLabelWidth),
+                        valueRange = 0f..(if (scrubbing || sliderRangeHeld) scrubDuration else duration).toFloat().coerceAtLeast(1f),
+                        enabled = timeline.seekable && duration > 0,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            .pointerInput(player, media?.pageUrl, media?.selectedVideoId, timeline.isLive) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                    val range = host.playbackTimeline()
+                                    scrubOrigin = range.startMs; scrubDuration = range.durationMs
+                                    sliderRangeHeld = true
+                                    var released = false
+                                    try {
+                                        do { val event = awaitPointerEvent(PointerEventPass.Final) }
+                                        while (event.changes.any { it.pressed })
+                                        released = true
+                                    } finally {
+                                        sliderRangeHeld = false
+                                        if (!released && !gestureScrub) scrubbing = false
+                                    }
+                                }
+                            }.semantics { contentDescription = "播放进度" })
+                    Text(if (timeline.isLive) "直播" else formatDuration(duration), Modifier.width(timeLabelWidth),
                         style = timeStyle, textAlign = androidx.compose.ui.text.style.TextAlign.Start, maxLines = 1)
                 }
-                if (controls && !(scrubbing && gestureScrub)) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+                if (controls && !(scrubbing && gestureScrub)) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+                    if (hasEpisodes) TextButton(onClick = { dialog = "episodes" }, enabled = !host.sourceLoading) { Text("选集") }
+                    if (hasQuality) TextButton(onClick = { dialog = "quality" }, enabled = !host.sourceLoading) { Text("清晰度") }
+                    if (hasAudio) TextButton(onClick = { dialog = "audio" }, enabled = !host.sourceLoading) { Text("音轨") }
+                    if (timeline.isLive) TextButton(onClick = { endHold(); host.goLive() }, enabled = !host.sourceLoading) { Text("返回直播") }
                     TextButton(onClick = { dialog = "speed" }) { Text("${speed}×") }
                     IconButton(onClick = { dialog = "gestures" }) { Icon(Icons.Rounded.TouchApp, "手势与进度预览") }
                     IconButton(onClick = { dialog = "tracks" }) { Icon(Icons.Rounded.Subtitles, "字幕与音轨") }
@@ -301,7 +366,16 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
                     style = MaterialTheme.typography.labelLarge, maxLines = 1)
             }
         }
-        if (!inPip) error?.let { message ->
+        if (!inPip && host.sourceError != null) {
+            GlassSurface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 440.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("来源暂时不可用", style = MaterialTheme.typography.titleLarge)
+                    Text("未能加载所选内容，请检查网络或稍后重新选择。已有播放内容会保留。")
+                    TextButton(onClick = host::clearSourceError) { Text("关闭提示") }
+                }
+            }
+        }
+        if (!inPip && host.sourceError == null) error?.let { message ->
             GlassSurface(Modifier.align(Alignment.Center).padding(24.dp).widthIn(max = 440.dp)) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("播放遇到问题", style = MaterialTheme.typography.titleLarge)
@@ -325,6 +399,8 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
             }
         } }
     }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("完成") } })
+    if (!inPip && dialog in listOf("episodes", "quality", "audio"))
+        OnlineChoiceDialog(dialog!!, host, player, tracks) { dialog = null }
     if (dialog == "tracks" && !inPip) TrackDialog(player, tracks, host) { dialog = null }
     if (dialog == "details" && !inPip) PlaybackDetailsDialog(host, onGlassChanged) { dialog = null }
     if (dialog == "gestures" && !inPip) PlaybackInteractionDialog { dialog = null }

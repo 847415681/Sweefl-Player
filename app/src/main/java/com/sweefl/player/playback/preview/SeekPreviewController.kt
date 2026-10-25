@@ -276,7 +276,9 @@ internal class SeekPreviewController(private val context: Context, private val s
                 }
             }
         }
-        val http = DefaultHttpDataSource.Factory().setUserAgent(source.userAgent ?: PlaybackConfig.DEFAULT_USER_AGENT)
+        val headers = com.sweefl.player.playback.engine.playbackRequestHeaders(source.requestHeaders)
+        val http = DefaultHttpDataSource.Factory().setUserAgent(headers["User-Agent"] ?: source.userAgent ?: PlaybackConfig.DEFAULT_USER_AGENT)
+            .setDefaultRequestProperties(headers)
             .setConnectTimeoutMs(3_000).setReadTimeoutMs(3_000).setTransferListener(counter)
         // The counter belongs only to HTTP upstream; cache-file hits never consume network budgets.
         val media = DefaultMediaSourceFactory(networkCache.factory(DefaultDataSource.Factory(context, http)))

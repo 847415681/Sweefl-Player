@@ -119,6 +119,8 @@ internal class PreviewNetworkCache(context: Context, private val source: Preview
                 if (value == null) append("-:") else append(value.length).append(':').append(value)
             }
             part(source.uri); part(source.userAgent)
+            com.sweefl.player.playback.engine.playbackRequestHeaders(source.requestHeaders).toSortedMap()
+                .forEach { (key, value) -> part(key); part(value) }
             part(spec.uri.toString()); part(spec.key)
             part((spec.flags and DataSpec.FLAG_ALLOW_GZIP).toString())
             spec.httpRequestHeaders.toSortedMap().forEach { (key, value) -> part(key); part(value) }

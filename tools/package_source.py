@@ -14,8 +14,11 @@ for p in root.rglob('*'):
  if not p.is_file():continue
  rel=p.relative_to(root)
  if any(x in skip for x in rel.parts):continue
- if rel.parts[0]=='docs' and any(x.startswith('testing') for x in rel.parts[1:]):continue
- if p.name=='local.properties' or p.suffix.lower() in {'.keystore','.jks','.pyc','.apk','.rgb'}:continue
+ if rel.parts[0]=='docs':
+  if any(x.startswith('testing') for x in rel.parts[1:]):continue
+  if len(rel.parts)>1 and rel.parts[1] in {'device-test','screenshots'}:continue
+  if len(rel.parts)>1 and rel.parts[1]=='research' and p.suffix.lower()!='.md':continue
+ if p.name=='local.properties' or p.suffix.lower() in {'.keystore','.jks','.pyc','.apk','.rgb','.mp4','.log','.jsonl','.iml'}:continue
  files.append((p,rel))
 manifest={str(rel).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p,rel in files}
 for required in ['LICENSE','app/build.gradle.kts','core/domain/build.gradle.kts','gradle/wrapper/gradle-wrapper.jar','gradle/libs.versions.toml','tools/guarded_v032.py']:

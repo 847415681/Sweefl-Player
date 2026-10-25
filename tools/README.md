@@ -2,6 +2,25 @@
 
 源码、单元测试和 lint 的标准入口是根项目的 `verify` Gradle 任务。此目录用于需要真实 Android 服务 / 媒体硬件的补充验证。
 
+## r43 Bilibili 与网络选轨
+
+先启动本地夹具服务，显式设置设备、独立输出目录，并通过 [保护脚本](guarded_v032.py) 运行。所有分组都保存/恢复三份偏好、音量、旋转及本轮创建的 reverse，不清空应用数据。
+
+```powershell
+$env:SWEEFL_SERIAL = '<明确授权的设备序列号>'
+$env:SWEEFL_TEST_OUT = 'docs/testing-r43-online/new-attempt'
+$env:SWEEFL_UI_SUITES = 'network-tracks,bilibili,bilibili-lifecycle'
+$env:SWEEFL_BILI_CASES = 'vod,vod-tracks,vod-resume,live'
+python tools/guarded_v032.py
+```
+
+- [通用选轨](network_tracks_check.py)：受控 HLS/DASH 的清晰度、自动选择、多音轨及单流控件隐藏；[夹具生成](generate_online_fixture.py)单独运行。
+- [Bilibili 点播/直播](bilibili_playback_check.py)：默认 `vod,live`；可选 `vod-tracks` 按真实 UI 目录检验画质/音轨 ID、解码格式、位置及意图，`vod-resume` 验证同一分享别名的历史恢复。公网素材的目录与可达性可能变化，须区分接口变化与应用回归。
+- [生命周期/登录入口](bilibili_lifecycle_check.py)：暂停回看后的旋转、HOME/原任务恢复，以及官方登录返回保留输入。不输入凭据、不退出登录；进程终止后的重建明确标记未运行。
+- [发布包烟测](bilibili_release_smoke.py)：使用 `SWEEFL_UI_SUITES='release-smoke,bilibili-release'` 和 `SWEEFL_APK` 指定签名 APK；不读取 Debug 诊断。依据排除中心控件的真实视频区域截图对检查非黑画面与运动，再验证正常暂停及能力入口。当前区域定义依赖锁定的竖屏布局，须人工查看截图。
+
+Debug 验证以新鲜诊断、实际解码格式及帧/内容增长为依据，不能只看 API 成功或菜单变更。直播拖动使用独立的 [UiAutomation 工装](slider_gesture/README.md)，在 UP 前读取真实 RangeInfo；原失败和复测目录分别保留。
+
 ## r42 大弹窗验证
 
 通过保护脚本选择 `dialog-perf,dialog-scene,modal-material,control-visibility`。性能采样不录屏；[逐窗口统计](analyze_dialog_performance.py)与[画面运动分析](analyze_modal_motion.py)分开使用，不把重复 UI 绘制当成视频帧率。模糊值通过 `SWEEFL_TEST_BLUR` 控制，保持同设备、同方向、同片源比较。
