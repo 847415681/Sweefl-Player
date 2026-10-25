@@ -20,6 +20,7 @@ sweefl-player/
 │       │   ├── common/          兼容现有数据的 URI 摘要键
 │       │   ├── history/         播放历史契约与 SharedPreferences 实现
 │       │   ├── media/           MediaStore 查询、缩略图 I/O
+│       │   ├── online/          Bilibili 解析、HTTP、WBI 与 CDN 候选
 │       │   └── preferences/     UA、流类型和应用偏好
 │       ├── playback/
 │       │   ├── engine/          Media3 创建、HTTP 和解码策略
@@ -88,6 +89,18 @@ flowchart TD
 
 [PlayerHost](../app/src/main/java/com/sweefl/player/feature/player/PlayerHost.kt)定义界面需要的状态与宿主操作。[PlayerWindowController](../app/src/main/java/com/sweefl/player/feature/player/platform/PlayerWindowController.kt)承接窗口亮度、媒体音量、系统栏和方向切换。播放 UI 继续使用 Media3 的播放与轨道接口，避免另造一套重复的播放器 API。
 
+## 在线来源与直播时间线（r43）
+
+[OnlineMedia 模型](../app/src/main/java/com/sweefl/player/core/model/OnlineMedia.kt)描述稳定页面、可用集数/画质/音频及选中流。[BilibiliMediaResolver](../app/src/main/java/com/sweefl/player/data/online/BilibiliMediaResolver.kt)由 AppContainer 注入，负责平台解析而不持有播放器。HTTP 传输、WBI 签名、CDN 候选排序在数据层，官方登录窗口留在功能层。
+
+解析结果交给 PlaybackSession；成功前保留旧引擎，通过取消与序号拒绝迟到结果。`pendingSource` 表示生命周期中可继续的请求，`failedSource` 仅供明确重试；成功提交或关闭错误时清理旧失败目标。首次分享别名解析后，使用 canonical 页读取历史与配置，不改变通用 URI 摘要算法。
+
+[OnlineMediaSourceFactory](../app/src/main/java/com/sweefl/player/playback/engine/OnlineMediaSourceFactory.kt)根据不可变选中源快照构造视频与音频，单文件 DASH SegmentBase 通过合并媒体源播放，外部字幕继续保留。预览使用当前视频流与必要请求头，不使用页面 HTML 地址或 Cookie。
+
+[PlaybackTimeline](../app/src/main/java/com/sweefl/player/core/model/PlaybackTimeline.kt)提供界面时间范围；[LiveReplayRules](../core/domain/src/main/kotlin/com/sweefl/player/domain/LiveReplayRules.kt)处理绝对时间、裁剪和延迟。HLS DVR 数据源只向同源限定目录继承正 `tmshift`，返回直播移除该参数。滑动中的范围冻结、暂停的内容位置及换画质后的回看位置由会话和界面共同保持。
+
+[OnlineChoiceDialogs](../app/src/main/java/com/sweefl/player/feature/player/ui/OnlineChoiceDialogs.kt)按实际能力展示。存在独立在线音频目录时选择该目录，否则使用受支持的 Media3 原生音轨；普通 HLS/DASH 不经过 B 站解析。详细 HTTP 契约与验证边界见 [Bilibili 说明](BILIBILI.md)。
+
 ## 设置与兼容契约
 
 [AppContainer](../app/src/main/java/com/sweefl/player/di/AppContainer.kt)使用 Application Context 创建仓库、设置和引擎工厂。[PlayerPreferences](../app/src/main/java/com/sweefl/player/data/preferences/PlayerPreferences.kt)仅提供存储及监听接口；Compose 订阅位于功能设置适配层。根组合将玻璃开关提供给设计组件。
@@ -103,12 +116,12 @@ flowchart TD
 
 ## 渲染、诊断与扩展
 
-[设计组件](../app/src/main/java/com/sweefl/player/core/designsystem/)统一按钮、输入、开关、滑块和弹窗。媒体库镜片折射同一解析场景；播放控件和弹窗共享最大 480×320、播放最高 8fps / 暂停 2fps 的视频取样。隐藏控件、PiP 或 Activity 停止时停止取样，恢复可见后重建；主视频保持 SurfaceView，镜片是 SDR UI，不能作为 HDR 还原证明。
+[设计组件](../app/src/main/java/com/sweefl/player/core/designsystem/)统一按钮、输入、开关、滑块和弹窗。媒体库镜片复用 Compose GPU 图层；视频取样最高 2560×1440，受用户采样档位、显示节奏与新帧提交约束，暂停稳定场景去重。弹窗独立合成下层 Window 与视频；物理模糊半径达到 4px 时可采用半尺寸传输，文字和锐利边缘不缩小。隐藏控件、PiP 或 Activity 停止时停止相应取样；主视频保持 SurfaceView，镜片是 SDR UI，不能作为 HDR 还原证明。当前调度和所有权约束见 [r42 说明](DIALOG-PERFORMANCE-r42.md)。
 
 [预览基础层](../app/src/main/java/com/sweefl/player/playback/preview/)只接收 `PreviewSource` 和明确注入的诊断开关，不引用功能层、Activity 或 BuildConfig。功能 UI 在拖动时拥有控制器，离开窗口或 `ON_STOP` 时关闭；它的暂停引擎不写历史、不播放音频，也不替代主引擎。请求串行与目标去重、纹理锁存和实际帧时间共同决定能否显示图片，失败则降级为时间提示。三区动作、横向目标限幅和帧时间算术位于纯规则模块。详细边界见 [0.3.0 说明](LIQUID-GLASS-0.3.0.md)。
 
 [诊断层](../app/src/main/java/com/sweefl/player/playback/diagnostics/)将设备能力枚举与每个播放器的采样分开，仍使用两秒间隔、后台文件写入和原子文件替换。测试参数继续仅在 Debuggable 构建启用。
 
-扩展位置：新增媒体来源实现 `VideoRepository`；替换历史存储实现 `PlaybackHistoryRepository` 并处理迁移；解码 / 网络策略改工厂；播放交互改功能 UI / 宿主契约；新视觉组件放设计层并显式传入数据。只有在复用和独立构建需求明确时，才把应用内的包进一步提取为 Android Library 模块。
+扩展位置：新增本地媒体库查询实现 `VideoRepository`；新增在线来源沿在线模型/解析器契约接入并由 AppContainer 注入，不把平台 API 放进媒体库仓库或 Composable；替换历史存储实现 `PlaybackHistoryRepository` 并处理迁移；解码 / 网络策略改工厂；播放交互改功能 UI / 宿主契约；新视觉组件放设计层并显式传入数据。只有在复用和独立构建需求明确时，才把应用内的包进一步提取为 Android Library 模块。
 
 构建、测试和提交约定见[开发指南](DEVELOPMENT.md)。格式、HDR 和功耗能力的既有边界见[0.2.0 验证报告](VALIDATION-0.2.md)，本次重构回归见[0.2.1 重构记录](REFACTOR-0.2.1.md)。

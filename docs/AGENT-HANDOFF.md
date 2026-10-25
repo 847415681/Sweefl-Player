@@ -1,6 +1,22 @@
 # Agent 交接：Sweefl Player r43
 
-更新：2026-10-25。本文件是新 agent 的入口；先读本页，再读[开发指南](DEVELOPMENT.md)、[架构指南](ARCHITECTURE.md)、[r42 性能说明](DIALOG-PERFORMANCE-r42.md)和[r41 连续性说明](GLASS-CONTINUITY-r41.md)。用户已要求将完整修复和文档提交到指定 GitHub 仓库。
+更新：2026-10-25（r43 交付后整理）。本文件是新 agent 的入口；按顺序阅读本页、[r43 交付快照](RELEASE-r43.md)、[开发指南](DEVELOPMENT.md)、[架构指南](ARCHITECTURE.md)。涉及玻璃或原生代码时，再读 [r42 性能说明](DIALOG-PERFORMANCE-r42.md)和 [r41 连续性说明](GLASS-CONTINUITY-r41.md)。用户已授权将完整修复和开发文档提交到指定 GitHub 仓库。
+
+## 可直接转发给下一位 agent
+
+```text
+在 D:\Ai_Projects\sweefl-player 接手 Sweefl Player。
+先读项目 AGENTS.md、docs/AGENT-HANDOFF.md、docs/RELEASE-r43.md，
+再按任务阅读 docs/DEVELOPMENT.md 和 docs/ARCHITECTURE.md。
+当前功能基线为 r43，功能提交 862c8951ed148042884a628e1196e932bc38494b，
+对应 CI 已成功，Release 已完成真机验收。后续文档提交不改变该 APK 基线。
+先检查 git status、git log -3 和 git remote -v，保留已有改动。
+本轮实现已完成，没有待续测试；等待我的下一项具体需求，不自动扩展功能。
+修改时保留 r41 原生/玻璃修复、r42 调度优化、r43 在线源和 DVR 契约。
+设备测试必须重新核对目标、使用保护脚本并恢复本轮捕获的数据和设置。
+```
+
+工作区及相邻隔离工具路径仅适用于当前机器；新环境按开发指南配置。原始设备证据与 dist 制品不在 Git 中，缺失不代表应自动下载、重跑或重建它们。
 
 ## 当前状态与用户要求
 
@@ -20,6 +36,10 @@ r41 曾修复“实时折射关闭”时图标隐藏但点击区域保留的问�
 
 | 入口 | 责任和约束 |
 | --- | --- |
+| [BilibiliMediaResolver](../app/src/main/java/com/sweefl/player/data/online/BilibiliMediaResolver.kt) | 页面/短链/剧集/直播解析、实际目录；VOD 与 Live 请求头契约分开 |
+| [OnlineMediaSourceFactory](../app/src/main/java/com/sweefl/player/playback/engine/OnlineMediaSourceFactory.kt) | 不可变选中源、视频/音频合并及外部字幕保留；不向 CDN 发送 Cookie |
+| [LiveReplayRules](../core/domain/src/main/kotlin/com/sweefl/player/domain/LiveReplayRules.kt) 与 [HlsDvrUriPolicy](../app/src/main/java/com/sweefl/player/playback/engine/HlsDvrUriPolicy.kt) | Long 时间与裁剪、正 tmshift、同源目录继承和返回直播去参数 |
+| [OnlineChoiceDialogs](../app/src/main/java/com/sweefl/player/feature/player/ui/OnlineChoiceDialogs.kt) | 根据实际在线目录或 Media3 支持轨道选择，不展示未返回的播放能力 |
 | [OpticalSeekHandoff](../app/src/main/java/com/sweefl/player/core/designsystem/OpticalSeekHandoff.kt) | 主线程交接状态机：固定旧帧、提交覆盖、执行跳转、提交新覆盖、撤去覆盖；epoch 拒绝过期回调，15 秒异常退出 |
 | [VideoGlass](../app/src/main/java/com/sweefl/player/core/designsystem/VideoGlass.kt) | 单次在途 PixelCopy、生命周期、几何重映射、采样就绪和提交回调；共享 `glassContentReady` |
 | [LiquidGlass](../app/src/main/java/com/sweefl/player/core/designsystem/LiquidGlass.kt) | AGSL 折射、Gaussian 模糊与独立锐利边缘；绘制门控必须遵循共享就绪规则，尤其关闭效果/API<33/纯音频 |
@@ -67,6 +87,10 @@ python tools/guarded_v032.py
 - 原始设备证据、偏好备份、录像及 RGB 缓冲不上传 GitHub。公开结果在[r41 说明](GLASS-CONTINUITY-r41.md)，本机证据保留在忽略目录中。
 
 ## 已验证范围与仍有限制的部分
+
+r43 功能提交为 `862c8951ed148042884a628e1196e932bc38494b`，[对应 CI](https://github.com/847415681/Sweefl-Player/actions/runs/40195752025) 已成功。完整制品哈希、17 轮证据索引与恢复汇总见 [r43 交付快照](RELEASE-r43.md)。功能交付已收尾，夹具服务和测试作业均已停止；无需继续旧的 CDN 排障或重复全部验收。
+
+B 站回看进程被系统终止后的重建、真实账号付费权益、PCM/听音测量没有验证。多段 durl 暂不拼接。旋转与 HOME/返回验证是同一进程内完成；不能据此宣称进程重建通过。这些是后续范围，不是自动开工清单。
 
 r41 基线已通过完整构建、单测、lint；三渲染路径的暂停跳转、连续跳转和旋转/Home 恢复；Debug/Release 的玻璃开关可见性；Release MP4/HLS/DASH/FFmpeg 播放；两档模糊的连续跳转、弹窗首帧和拖动、进出/比例切换；慢加载转圈及恢复；纯音频控制。
 

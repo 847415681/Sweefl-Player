@@ -1,6 +1,8 @@
 # 开发与验证
 
-当前 r42 增加大弹窗显示对齐采样、暂停场景去重和按物理模糊半径缩放的 GPU 传输层。实现约束、同设备前后数据及 CI SDK 包修复见 [r42 说明](DIALOG-PERFORMANCE-r42.md)；完整项目源包可用 `python tools/package_source.py --revision r42` 创建，不覆盖已有交付。
+当前功能基线为 **0.3.2 / versionCode 6 / r43**，已交付 Bilibili 点播、能力选轨和服务器直播时移。接手先读[交接入口](AGENT-HANDOFF.md)，代码、构建与设备验收对应关系见 [r43 交付快照](RELEASE-r43.md)，协议及能力边界见 [Bilibili 说明](BILIBILI.md)。r41 原生窗口修正及 r42 玻璃性能优化继续保留。
+
+源码包由 `python tools/package_source.py --revision r43` 生成；本机该版本已交付，脚本会拒绝覆盖。文档更新以 Git 为准，不重写历史归档；下一次实际交付使用新的 revision。
 
 ## 环境和入口
 
@@ -51,6 +53,22 @@ cd Sweefl-Player
 ```
 
 安装 JDK 17 和 Android SDK 35，设置 `JAVA_HOME` 与 `ANDROID_HOME`，或在本机 `local.properties` 中配置 `sdk.dir`（不要提交该文件）。Windows 使用 `gradlew.bat`；Linux/macOS 使用 `./gradlew`。无需 root 即可运行应用。仓库不含签名密钥或 APK，第三方源码及许可证保留在 `third-party`。
+
+## r43 在线播放开发路径
+
+| 修改内容 | 首先阅读 | 相应验证 |
+| --- | --- | --- |
+| 输入、短链、分 P/番剧、API 与返回目录 | [输入规范化](../app/src/main/java/com/sweefl/player/feature/network/NetworkAddress.kt)、[解析器](../app/src/main/java/com/sweefl/player/data/online/BilibiliMediaResolver.kt) | app 解析器单测；实际点播解码，不能只检查 HTTP200 |
+| 视频与独立音频组合、请求头 | [在线源工厂](../app/src/main/java/com/sweefl/player/playback/engine/OnlineMediaSourceFactory.kt)、[选中源快照](../app/src/main/java/com/sweefl/player/playback/engine/SelectedOnlineSourceSnapshot.kt) | 源组合单测；`vod-tracks` 与普通 `network-tracks` |
+| 直播回看时间与分片参数 | [纯规则](../core/domain/src/main/kotlin/com/sweefl/player/domain/LiveReplayRules.kt)、[URI 策略](../app/src/main/java/com/sweefl/player/playback/engine/HlsDvrUriPolicy.kt) | domain/app 单测；room6 `live`，保留实际目标与容差断言 |
+| 取消、切源、暂停、历史和恢复 | [会话](../app/src/main/java/com/sweefl/player/feature/player/PlaybackSession.kt) | `vod-resume`、`bilibili-lifecycle`；涉及未验证的进程重建时另设计证据 |
+| 控件能力、选择对话框 | [在线选项](../app/src/main/java/com/sweefl/player/feature/player/ui/OnlineChoiceDialogs.kt)、[播放界面](../app/src/main/java/com/sweefl/player/feature/player/ui/PlayerScreen.kt) | 单流隐藏、多选可见、实际格式变化及旧字幕入口 |
+
+完整命令和环境变量见[工具说明](../tools/README.md)。`bilibili` 默认运行 `vod,live`；多画质/音轨和分享历史需要显式设置 `SWEEFL_BILI_CASES='vod,vod-tracks,vod-resume,live'`。Release 用 `bilibili-release`，不能读取遗留 Debug 诊断作为当前证据。
+
+排查顺序：输入与 canonical 身份 → API 返回目录 → 选中 URL/请求头 → 实际解码 → 控件与位置。VOD/PGC 和 Live 的 UA/Referer 契约不同，不要统一替换；不要记录 Cookie 或签名媒体 URL。API 请求成功不代表 CDN 可播放，画质菜单变化也不代表解码格式已切换。
+
+分享别名首次解析后需按 canonical 页读取历史与渲染/字幕配置；显式 Bundle 位置优先。失败请求不能混入后台待续请求，旧引擎恢复不能取消新用户选择。直播窗口按下时冻结，UP 时裁剪；测试必须读取实际滑块值，不能用触摸终点估算目标。
 
 ## r40 渲染与网络实现
 
