@@ -1,8 +1,12 @@
 """Package complete project/retained dependency sources, excluding local secrets/build/evidence caches."""
 from pathlib import Path
-import hashlib,json,zipfile
+import argparse,hashlib,json,re,zipfile
+parser=argparse.ArgumentParser()
+parser.add_argument('--revision',required=True)
+args=parser.parse_args()
+if not re.fullmatch(r'r\d+',args.revision):parser.error('revision must be r followed by digits')
 root=Path(__file__).resolve().parents[1]
-out=root/'dist/Sweefl-Player-0.3.2-source-r40.zip'
+out=root/f'dist/Sweefl-Player-0.3.2-{args.revision}-source.zip'
 assert not out.exists(), 'Refuse to overwrite an existing release source bundle'
 skip={'.git','.gradle','.kotlin','.idea','build','dist','__pycache__'}
 files=[]

@@ -16,6 +16,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.translate
@@ -26,6 +28,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+
+internal fun glassTransmissionScale(blurPixels: Float): Float = if (blurPixels >= 4f) .5f else 1f
 
 @Stable
 class GlassEnvironment {
@@ -163,8 +167,10 @@ fun Modifier.opticalGlass(radius: Int): Modifier {
     val compositeBackdrop = LocalGlassBackdropIsComposite.current
     val blurAmount = LocalGlassBlurAmount.current
     val blurRadius = with(androidx.compose.ui.platform.LocalDensity.current) { (blurAmount * 24f).dp.toPx() }
-    val gaussianBlur = remember(blurRadius) {
-        if (blurRadius > 0f) BlurEffect(blurRadius, blurRadius, TileMode.Clamp) else null
+    val transmissionScale = if (compositeBackdrop) glassTransmissionScale(blurRadius) else 1f
+    val gaussianBlur = remember(blurRadius, transmissionScale) {
+        val scaledRadius = blurRadius * transmissionScale
+        if (scaledRadius > 0f) BlurEffect(scaledRadius, scaledRadius, TileMode.Clamp) else null
     }
     val blurredTransmission = rememberGraphicsLayer()
     val view=LocalView.current
@@ -224,11 +230,17 @@ fun Modifier.opticalGlass(radius: Int): Modifier {
                     effect.setFloatUniform("layerOffset", pad.toFloat(), pad.toFloat())
                     blurredTransmission.renderEffect = gaussianBlur
                     blurredTransmission.alpha = transmission
-                    blurredTransmission.record(this, layoutDirection,
-                        IntSize(size.width.toInt() + pad * 2, size.height.toInt() + pad * 2)) {
-                        drawRect(brush)
+                    val paddedSize = Size(size.width + pad * 2f, size.height + pad * 2f)
+                    blurredTransmission.record(this, layoutDirection, IntSize(
+                        kotlin.math.ceil(paddedSize.width * transmissionScale).toInt(),
+                        kotlin.math.ceil(paddedSize.height * transmissionScale).toInt())) {
+                        scale(transmissionScale, pivot = Offset.Zero) {
+                            drawRect(brush, size = paddedSize)
+                        }
                     }
-                    translate(-pad.toFloat(), -pad.toFloat()) { drawLayer(blurredTransmission) }
+                    translate(-pad.toFloat(), -pad.toFloat()) {
+                        scale(1f / transmissionScale, pivot = Offset.Zero) { drawLayer(blurredTransmission) }
+                    }
                 }
             } else {
                 // No valid video sample must never mean an empty transparent surface.

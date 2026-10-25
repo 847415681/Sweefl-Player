@@ -2,7 +2,7 @@
 
 面向 Android ARMv8-A / `arm64-v8a` 的原生视频播放器，采用 Kotlin、Compose 与 AndroidX Media3。包含本地与网络播放、系统软硬解及实验性 Android FFmpeg 解码、外挂字幕时间同步、GPU SDR 增强、亮度/音量手势、画中画，以及 AGSL 液态玻璃折射。
 
-**当前源码对应 0.3.2 r41 本地交付版本。** 已完成本地构建及限定设备回归，不等于全部设备兼容或正式商店发布。最新修复和实测边界见 [r41 验证说明](docs/GLASS-CONTINUITY-r41.md)，开发入口见 [开发指南](docs/DEVELOPMENT.md)，另一个 agent 接手请先读 [交接文档](docs/AGENT-HANDOFF.md)。
+**当前源码对应 0.3.2 r42 本地交付版本。** 已完成本地构建及限定设备回归，不等于全部设备兼容或正式商店发布。最新大弹窗性能结果见 [r42 验证说明](docs/DIALOG-PERFORMANCE-r42.md)，此前连续性修复见 [r41 验证说明](docs/GLASS-CONTINUITY-r41.md)，开发入口见 [开发指南](docs/DEVELOPMENT.md)，另一个 agent 接手请先读 [交接文档](docs/AGENT-HANDOFF.md)。
 
 支持 1–32 路共享 HTTP Range 分块加速和 5–600 秒缓冲目标；需要服务器满足长度、Range 和强 ETag 条件，否则兼容回退。HLS/DASH 仅符合条件的大资源内部加速，并非同时预取 32 个分片。
 

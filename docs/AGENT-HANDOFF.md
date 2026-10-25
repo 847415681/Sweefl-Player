@@ -1,12 +1,14 @@
-# Agent 交接：Sweefl Player r41
+# Agent 交接：Sweefl Player r42
 
-更新：2026-10-25。本文件是新 agent 的入口；先读本页，再读[开发指南](DEVELOPMENT.md)、[架构指南](ARCHITECTURE.md)和[r41 验证说明](GLASS-CONTINUITY-r41.md)。用户已要求将本次完整修复和文档提交到指定 GitHub 仓库。
+更新：2026-10-25。本文件是新 agent 的入口；先读本页，再读[开发指南](DEVELOPMENT.md)、[架构指南](ARCHITECTURE.md)、[r42 性能说明](DIALOG-PERFORMANCE-r42.md)和[r41 连续性说明](GLASS-CONTINUITY-r41.md)。用户已要求将完整修复和文档提交到指定 GitHub 仓库。
 
 ## 当前状态与用户要求
 
-当前应用为 0.3.2 / versionCode 6，r41 是交付标识。已完成并真机验证本轮玻璃连续性及控件不可见回归，优化 Release 已留在手机；没有待恢复的自动任务、测试服务器或本轮创建的 ADB reverse。不要自动开始新功能，先接收用户的新任务。
+当前应用为 0.3.2 / versionCode 6，r42 是交付标识。新增大弹窗性能优化已完成构建和真机验证；12% 模糊的弹窗绘制速率约 9.44 → 39.77 次/秒、P95 21 → 15ms，独立录像确认背景变化增多。优化 Release 留在手机，用户偏好与音量、旋转恢复。不要自动开始新功能，先接收用户的新任务。
 
-最新问题的实际触发条件是“实时折射关闭”：不创建视频采样，但绘制层仍要求采样非空，导致图标隐藏、点击区域保留。现在组合与绘制共用 `glassContentReady`。用户原始玻璃开关为关闭，测试结束已恢复；不能通过强制打开玻璃来掩盖此问题。
+最新改动是 DialogBackdrop 显示对齐调度、静止场景去重，以及 LiquidGlass 的模糊背景层缩放。物理模糊半径达到 4px 才使用半宽半高，零模糊保留完整细节，文字与锐利边缘不缩小。不得把下层 Window 缓存为静态 UI，也不得把可复用的视频位图直接交给工作线程。详见 r42 说明。
+
+r41 曾修复“实时折射关闭”时图标隐藏但点击区域保留的问题；组合与绘制共用 `glassContentReady`。用户原始玻璃开关为关闭，测试结束已恢复，不能强制打开以掩盖回归。
 
 用户此前要求所有指定效果修复后才交付，不能用部分完成或普通透明回退宣称完成。后续修改必须保留：跳转/等待时可见 loading；视频与玻璃同步；属性/手势弹窗初现、滑动模糊、进出视频和比例切换均不闪普通透明；关闭玻璃时控件仍可见。
 
@@ -62,14 +64,16 @@ python tools/guarded_v032.py
 
 ## 已验证范围与仍有限制的部分
 
-已通过完整构建、单测、lint；三渲染路径的暂停跳转、连续跳转和旋转/Home 恢复；Debug/Release 的玻璃开关可见性；Release MP4/HLS/DASH/FFmpeg 播放；两档模糊的连续跳转、弹窗首帧和拖动、进出/比例切换；慢加载转圈及恢复；纯音频控制。
+r41 基线已通过完整构建、单测、lint；三渲染路径的暂停跳转、连续跳转和旋转/Home 恢复；Debug/Release 的玻璃开关可见性；Release MP4/HLS/DASH/FFmpeg 播放；两档模糊的连续跳转、弹窗首帧和拖动、进出/比例切换；慢加载转圈及恢复；纯音频控制。
 
 这些是单台设备和指定 SDR 素材的证据。临时交接覆盖为 SDR；GPU frame-commit 不是 SurfaceFlinger 精确 latch 证明。没有声称所有设备、HDR 过渡保真、全格式、完整 16KB 页兼容或长期功耗均已验证。正式生产签名、完整无障碍和更多设备覆盖仍是后续范围，不是本轮玻璃修复的已完成成果。
 
 ## 交付与接手动作
 
-r41 APK SHA-256：`c2a8086a84899c93ebadb1a052e9fd06916fc6268421f6977df24f2528dd5676`。源包 SHA-256：`07ee1b3e0becfbb364a9c748552135bc0919d09e7fd3a0daa33fd3666ec4ba29`。本轮 GitHub 交接文档是在该本地源包交付之后补充的，远端提交比原源包多文档更新；应用代码及 APK 不因此变化。GitHub 的最终提交 SHA 以 `git log -1` 和本次交接回复为准。
+r42 APK SHA-256：`5f2c54144f32df169d351517f7448e619e22a28031c0f1f20ab221da7c93f2d0`。本次验证范围及性能对照见 [r42 说明](DIALOG-PERFORMANCE-r42.md)，源包哈希以本地交付清单为准，GitHub 提交以 `git log -1` 和交付回复为准。CI 显式安装 `platform-tools`，修复 `setup-android@v3` 默认请求废弃 `tools` 包的问题。
 
-本机工作树通常为 `D:\Ai_Projects\sweefl-player`；工具在相邻 `.android-tools`，不是项目依赖的固定绝对路径。本地 r41 APK/源包在被忽略的 dist 目录；本次上传源码、文档和构建必需的 AAR，不创建 GitHub 二进制 Release，不提交签名私钥。
+历史 r41 APK SHA-256：`c2a8086a84899c93ebadb1a052e9fd06916fc6268421f6977df24f2528dd5676`；源包 SHA-256：`07ee1b3e0becfbb364a9c748552135bc0919d09e7fd3a0daa33fd3666ec4ba29`。
+
+本机工作树通常为 `D:\Ai_Projects\sweefl-player`；工具在相邻 `.android-tools`，不是项目依赖的固定绝对路径。本地 APK/源包在被忽略的 dist 目录；上传源码、文档和构建必需的 AAR，不创建 GitHub 二进制 Release，不提交签名私钥。
 
 新 agent 接手：执行 `git status`、`git log -1` 和 `git remote -v`；确认本文件与当前 HEAD 一致；阅读用户新要求，再选择相关实现和最小必要回归。不要自动重跑全部手机测试，不要仅凭旧摘要宣称新的改动已验证。

@@ -2,6 +2,12 @@
 
 源码、单元测试和 lint 的标准入口是根项目的 `verify` Gradle 任务。此目录用于需要真实 Android 服务 / 媒体硬件的补充验证。
 
+## r42 大弹窗验证
+
+通过保护脚本选择 `dialog-perf,dialog-scene,modal-material,control-visibility`。性能采样不录屏；[逐窗口统计](analyze_dialog_performance.py)与[画面运动分析](analyze_modal_motion.py)分开使用，不把重复 UI 绘制当成视频帧率。模糊值通过 `SWEEFL_TEST_BLUR` 控制，保持同设备、同方向、同片源比较。
+
+[弹窗录像](modal_material_check.py)先用正常输入暂停并定位控件，再立即恢复播放并打开弹窗，避免 Release 自动隐藏；手势窗口使用新的运动片源。[进出和比例分析](analyze_entry_material.py)读取真实 UI 按钮边界，支持竖屏；竖屏 FIT 模式的上下黑边属于正常视频布局，不能当作玻璃掉色。新分析脚本所需 RGB 必须按原生帧解码至 780×360，不使用帧率转换。
+
 ## 设备与证据配置
 
 [公共设备助手](device_lab.py)集中 ADB、设备序列号、输出目录、启动参数和诊断读取。旧脚本从格式矩阵导入的辅助函数仍兼容；新脚本直接引用公共助手。

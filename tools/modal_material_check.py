@@ -1,16 +1,25 @@
-"""Record first modal appearance and continuous blur dragging, under guarded_v032."""
+"""Record real modal first frames and blur dragging under guarded_v032 (Debug or Release)."""
 import subprocess,time,uuid
 from device_lab import verify_device,launch,adb,ADB,SERIAL,OUT
 from ui_lab import ui,tap,find,screenshot
 from glass_gesture_regression import bounds,input_cmd
 verify_device()
-launch('synthetic/avc1080.mp4',extra=('--ez','keepControls','true'),key='modal-material')
-t=ui('initial');assert find(t,'播放信息与解码') is not None
-root_bounds=bounds(next(t.iter('node')))
-if root_bounds[2]-root_bounds[0]<root_bounds[3]-root_bounds[1]:
- tap(t,'切换横竖屏');t=ui('landscape')
-root_bounds=bounds(next(t.iter('node')))
-assert root_bounds[2]-root_bounds[0]>root_bounds[3]-root_bounds[1]
+
+def prepare(key):
+ # Release ignores keepControls. Pause through normal input before reading slow UI dumps,
+ # then resume and open the modal back-to-back from known visible control positions.
+ launch('synthetic/avc1080.mp4',extra=('--ez','benchmark','false'),key=key)
+ time.sleep(4)
+ t=ui(key+'-bounds');a,b,c,d=bounds(next(t.iter('node')))
+ input_cmd(f'tap {(a+c)//2} {(b+d)//2}');time.sleep(.45)
+ input_cmd(f'tap {(a+c)//2} {(b+d)//2}')
+ t=ui(key+'-paused');assert find(t,'播放') is not None
+ a,b,c,d=bounds(next(t.iter('node')))
+ if c-a<d-b:
+  tap(t,'切换横竖屏');t=ui(key+'-landscape')
+ a,b,c,d=bounds(next(t.iter('node')))
+ assert c-a>d-b and find(t,'播放') is not None
+ return t
 
 def record(name,action):
  remote='/sdcard/Download/Sweefl-modal-'+uuid.uuid4().hex+'.mp4'
@@ -24,8 +33,11 @@ def record(name,action):
  adb('pull',remote,str(OUT/(name+'.mp4')))
  adb('shell','rm',remote)
 
+t=prepare('modal-info')
 def open_info():
- tap(t,'播放信息与解码');ui('info-open');screenshot('info-open')
+ tap(t,'播放');tap(t,'播放信息与解码')
+ shown=ui('info-open');assert any(n.get('text')=='播放信息与解码' for n in shown.iter('node'))
+ screenshot('info-open')
 record('info-open',open_info)
 for n in range(12):
  t=ui('blur-find-'+str(n));nodes=[x for x in t.iter('node') if x.get('content-desc')=='玻璃模糊程度' and x.get('class')=='android.widget.SeekBar']
@@ -41,10 +53,12 @@ def drag_blur():
   input_cmd(f'swipe {c-4} {y} {a+4} {y} 700')
  screenshot('after-drag')
 record('blur-drag',drag_blur)
-input_cmd('keyevent 4');t=ui('after-info-close')
-assert find(t,'手势与进度预览') is not None
-
+input_cmd('keyevent 4')
+# A fresh moving fixture avoids mistaking the first fixture's ended frame for low FPS.
+t=prepare('modal-gestures')
 def open_gestures():
- tap(t,'手势与进度预览');ui('gestures-open');screenshot('gestures-open')
+ tap(t,'播放');tap(t,'手势与进度预览')
+ shown=ui('gestures-open');assert any(n.get('text')=='手势与进度预览' for n in shown.iter('node'))
+ screenshot('gestures-open')
 record('gestures-open',open_gestures)
 print('Modal first appearance and blur dragging recorded for frame inspection',flush=True)

@@ -1,5 +1,7 @@
 # 开发与验证
 
+当前 r42 增加大弹窗显示对齐采样、暂停场景去重和按物理模糊半径缩放的 GPU 传输层。实现约束、同设备前后数据及 CI SDK 包修复见 [r42 说明](DIALOG-PERFORMANCE-r42.md)；完整项目源包可用 `python tools/package_source.py --revision r42` 创建，不覆盖已有交付。
+
 ## 环境和入口
 
 要求 JDK 17、Android SDK Platform 35、Build Tools 35.0.0。Gradle 8.13 由项目 Wrapper 固定；依赖和插件版本集中在[版本目录](../gradle/libs.versions.toml)。依赖升级与结构重构应分别验证。

@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.view.Choreographer
 import android.view.PixelCopy
 import android.view.View
 import android.view.Window
@@ -71,11 +72,16 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
     }
     var retainedPadding by remember(sourceWindow, dialogView) { mutableFloatStateOf(requestedPadding) }
     val padding = maxOf(retainedPadding, requestedPadding)
-    SideEffect { if (retainedPadding < padding) retainedPadding = padding }
     val paddingPx = with(LocalDensity.current) { padding.dp.toPx() }
     val latestPadding = rememberUpdatedState(paddingPx)
     val bounds = remember(sourceWindow, dialogView) { mutableStateOf<ScreenRect?>(null) }
     val captureRef = remember(sourceWindow, dialogView) { arrayOfNulls<DialogBackdropCapture>(1) }
+    SideEffect {
+        if (retainedPadding < padding) {
+            retainedPadding = padding
+            captureRef[0]?.invalidateCrop()
+        }
+    }
     val reportBounds: (ScreenRect?) -> Unit = remember(sourceWindow, dialogView) {
         { value ->
             if (bounds.value != value) {
@@ -89,13 +95,19 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
     val inheritedVideo = LocalVideoGlassBackdrop.current
     val composite = remember(sourceWindow, dialogView) { mutableStateOf<GlassVideoFrame?>(null) }
     val latestUnderlay = rememberUpdatedState(underlay)
+    val latestPolicy = rememberUpdatedState(LocalGlassCapturePolicy.current)
+    // A two-pixel input footprint is below the Gaussian support here; foreground text
+    // and the sharp optical rim still render at full resolution. Zero blur stays 1:1.
+    val blurPixels = with(LocalDensity.current) { (LocalGlassBlurAmount.current * 24f).dp.toPx() }
+    val latestScale = rememberUpdatedState(glassTransmissionScale(blurPixels))
     DisposableEffect(sourceWindow, dialogView, owner, enabled, inheritedVideo) {
         var capture: DialogBackdropCapture? = null
         fun start() {
             if (capture == null && enabled && Build.VERSION.SDK_INT >= 33 && sourceWindow != null) {
                 capture = DialogBackdropCapture(sourceWindow, dialogView,
                     { latestUnderlay.value.value }, inheritedVideo, { bounds.value }, { latestPadding.value },
-                    { composite.value = it }).also { captureRef[0] = it; it.start() }
+                    { latestPolicy.value.intervalNanos(dialogView.display?.refreshRate ?: 60f) },
+                    { latestScale.value }, { composite.value = it }).also { captureRef[0] = it; it.start() }
             }
         }
         fun stop() { capture?.stop(); capture = null; captureRef[0] = null; composite.value = null }
@@ -118,11 +130,12 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
         content = { content(reportBounds) })
 }
 
-/** One flight, no queued frames, at most 15Hz while modal is visible. No bitmap recycling
- * while RenderThread may still hold a shader; two output buffers plus one private UI buffer. */
+/** One flight, no queued frames. Start-to-start deadlines include copy/composition work.
+ * No bitmap recycling while RenderThread may still hold a shader. */
 private class DialogBackdropCapture(private val source: Window, private val dialogView: View,
     private val underlay: () -> GlassVideoFrame?, private val needsVideo: Boolean,
     private val bounds: () -> ScreenRect?, private val paddingPx: () -> Float,
+    private val intervalNanos: () -> Long, private val sampleScale: () -> Float,
     private val publish: (GlassVideoFrame?) -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("SweeflDialogCopy").apply { start() }
@@ -132,16 +145,25 @@ private class DialogBackdropCapture(private val source: Window, private val dial
     private var ui: Bitmap? = null
     private var front: Bitmap? = null
     private var back: Bitmap? = null
-    private val tick = Runnable { capture() }
+    private val choreographer = Choreographer.getInstance()
+    private var nextCaptureNanos = 0L
+    private val tick = Choreographer.FrameCallback { capture(it) }
     private var geometryRevision = 0L
+    private var sourceDrawRevision = 0L
+    private var sampledDrawRevision = -1L
+    private var sampledGeometryRevision = -1L
+    private var sampledBase: GlassVideoFrame? = null
+    private var sampledDim = -1f
+    private var sampledScale = -1f
+    private val sourceDrawListener = android.view.ViewTreeObserver.OnDrawListener { sourceDrawRevision++ }
     fun invalidateGeometry() {
         publish(null)
         invalidateCrop()
     }
     fun invalidateCrop() {
         geometryRevision++
-        main.removeCallbacks(tick)
-        if (!stopped && !copying) main.post(tick)
+        choreographer.removeFrameCallback(tick)
+        if (!stopped && !copying) choreographer.postFrameCallback(tick)
     }
     private var observedDecor: View? = null
     private data class SourceGeometry(val decor: View, val modal: Window,
@@ -150,19 +172,34 @@ private class DialogBackdropCapture(private val source: Window, private val dial
     private val sourceLayoutListener = View.OnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
         if (l != ol || t != ot || r != or || b != ob) invalidateGeometry()
     }
+    private fun observeSource(decor: View?) {
+        if (observedDecor === decor) return
+        observedDecor?.removeOnLayoutChangeListener(sourceLayoutListener)
+        observedDecor?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(sourceDrawListener)
+        observedDecor = decor
+        decor?.addOnLayoutChangeListener(sourceLayoutListener)
+        decor?.viewTreeObserver?.addOnDrawListener(sourceDrawListener)
+    }
     fun start() {
-        observedDecor = source.peekDecorView()
-        observedDecor?.addOnLayoutChangeListener(sourceLayoutListener)
-        main.post(tick)
+        observeSource(source.peekDecorView())
+        choreographer.postFrameCallback(tick)
     }
     fun stop() {
-        stopped = true; main.removeCallbacks(tick); thread.quitSafely()
-        observedDecor?.removeOnLayoutChangeListener(sourceLayoutListener); observedDecor = null
+        stopped = true; choreographer.removeFrameCallback(tick); thread.quitSafely()
+        observeSource(null)
+        sampledBase = null
         ui = null; front = null; back = null
     }
-    private fun schedule() { if (!stopped) main.postDelayed(tick, 67L) }
-    private fun capture() {
+    private fun schedule() {
+        choreographer.removeFrameCallback(tick)
+        if (!stopped) choreographer.postFrameCallback(tick)
+    }
+    private fun capture(frameTimeNanos: Long) {
         if (stopped || copying) return
+        if (frameTimeNanos + 1_000_000L < nextCaptureNanos) { schedule(); return }
+        val interval = intervalNanos().coerceAtLeast(1_000_000L)
+        nextCaptureNanos = if (nextCaptureNanos == 0L || frameTimeNanos - nextCaptureNanos > interval)
+            frameTimeNanos + interval else nextCaptureNanos + interval
         val decor = source.peekDecorView()
         val modal = dialogView.glassOwnerWindow()
         if (decor == null || modal == null || modal === source || !decor.isAttachedToWindow ||
@@ -174,11 +211,7 @@ private class DialogBackdropCapture(private val source: Window, private val dial
             lastSourceGeometry = geometry
             geometryRevision++
             publish(null)
-            if (observedDecor !== decor) {
-                observedDecor?.removeOnLayoutChangeListener(sourceLayoutListener)
-                observedDecor = decor
-                decor.addOnLayoutChangeListener(sourceLayoutListener)
-            }
+            observeSource(decor)
         }
         val base = underlay()
         if (needsVideo && base == null) { schedule(); return }
@@ -198,11 +231,18 @@ private class DialogBackdropCapture(private val source: Window, private val dial
             ceil(dialogBounds.bottom + paddingPx - originArray[1]).toInt().coerceIn(0, height))
         if (crop.isEmpty) { schedule(); return }
         val origin = Offset((originArray[0] + crop.left).toFloat(), (originArray[1] + crop.top).toFloat())
-        // One bitmap pixel per window pixel: zero blur keeps the original detail.
-        val targetWidth = crop.width()
-        val targetHeight = crop.height()
+        val scale = sampleScale()
+        val targetWidth = ceil(crop.width() * scale).toInt().coerceAtLeast(1)
+        val targetHeight = ceil(crop.height() * scale).toInt().coerceAtLeast(1)
+        val scaleX = targetWidth.toFloat() / crop.width()
+        val scaleY = targetHeight.toFloat() / crop.height()
         val dim = if (modal.attributes.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND != 0)
             modal.attributes.dimAmount.coerceIn(0f, 1f) else 0f
+        val drawingRevision = sourceDrawRevision
+        if (front != null && sampledBase === base && sampledDrawRevision == drawingRevision &&
+            sampledGeometryRevision == requestRevision && sampledDim == dim && sampledScale == scale) {
+            schedule(); return
+        }
         val uiTarget: Bitmap
         val output: Bitmap
         try {
@@ -219,7 +259,7 @@ private class DialogBackdropCapture(private val source: Window, private val dial
             val left = base.origin.x - origin.x
             val top = base.origin.y - origin.y
             underlayCanvas.drawBitmap(base.bitmap, null,
-                RectF(left, top, left + base.width, top + base.height),
+                RectF(left * scaleX, top * scaleY, (left + base.width) * scaleX, (top + base.height) * scaleY),
                 Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         }
         copying = true
@@ -243,10 +283,14 @@ private class DialogBackdropCapture(private val source: Window, private val dial
                             if (requestRevision == geometryRevision && bounds() == dialogBounds &&
                                 source.peekDecorView() === decor && decor.isAttachedToWindow &&
                                 decor.width == width && decor.height == height && currentModal === modal &&
-                                currentDim == dim && currentOrigin.contentEquals(originArray) &&
+                                currentDim == dim && sampleScale() == scale && currentOrigin.contentEquals(originArray) &&
                                 (!needsVideo || underlay() != null)) {
+                                sampledBase = base
+                                sampledDrawRevision = drawingRevision
+                                sampledGeometryRevision = requestRevision
+                                sampledDim = dim; sampledScale = scale
                                 back = front; front = output
-                                publish(GlassVideoFrame(output, origin, targetWidth.toFloat(), targetHeight.toFloat()))
+                                publish(GlassVideoFrame(output, origin, crop.width().toFloat(), crop.height().toFloat()))
                             } else if (source.peekDecorView() !== decor || !decor.isAttachedToWindow ||
                                 decor.width != width || decor.height != height || currentModal !== modal ||
                                 !currentOrigin.contentEquals(originArray)) {
