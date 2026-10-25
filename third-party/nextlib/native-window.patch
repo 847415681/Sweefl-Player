@@ -1,0 +1,74 @@
+--- a/ffvideo.cpp
++++ b/ffvideo.cpp
+@@ -48,21 +48,22 @@
+     }
+ 
+     bool MaybeAcquireNativeWindow(JNIEnv *env, jobject new_surface) {
+-        if (surface == new_surface) {
++        // JNI local references cannot be retained across calls. Even the same Java
++        // Surface can be rebound to a different BufferQueue after recreation.
++        ANativeWindow *acquired = new_surface == nullptr ? nullptr
++                : ANativeWindow_fromSurface(env, new_surface);
++        if (acquired == nullptr) {
++            LOGE("Unable to acquire current Surface native window");
++            return false;
++        }
++        if (acquired == native_window) {
++            ANativeWindow_release(acquired); // Balance this call's acquisition.
+             return true;
+         }
+-        if (native_window) {
+-            ANativeWindow_release(native_window);
+-        }
++        if (native_window) ANativeWindow_release(native_window);
++        native_window = acquired;
+         native_window_width = 0;
+         native_window_height = 0;
+-        native_window = ANativeWindow_fromSurface(env, new_surface);
+-        if (native_window == nullptr) {
+-            LOGE("kJniStatusANativeWindowError");
+-            surface = nullptr;
+-            return false;
+-        }
+-        surface = new_surface;
+         return true;
+     }
+ 
+@@ -76,7 +77,6 @@
+     SwsContext *swsContext{};
+ 
+     ANativeWindow *native_window = nullptr;
+-    jobject surface = nullptr;
+     int native_window_width = 0;
+     int native_window_height = 0;
+ };
+@@ -213,15 +213,26 @@
+             LOGE("Failed to allocate swsContext.");
+             return VIDEO_DECODER_ERROR_OTHER;
+         }
++        sws_freeContext(jniContext->swsContext);
+         jniContext->swsContext = swsContext;
+     }
+ 
+     ANativeWindow_Buffer native_window_buffer;
+     int result = ANativeWindow_lock(jniContext->native_window, &native_window_buffer, nullptr);
+     if (result == -19) {
+-        jniContext->surface = nullptr;
+-        return VIDEO_DECODER_SUCCESS;
+-    } else if (result || native_window_buffer.bits == nullptr) {
++        // The Java Surface may have changed between acquire and lock. Reacquire
++        // once for this SAME output buffer; never report a dropped paused frame
++        // as successfully presented.
++        if (!jniContext->MaybeAcquireNativeWindow(env, surface) ||
++            ANativeWindow_setBuffersGeometry(jniContext->native_window,
++                    displayed_width, displayed_height, kImageFormatYV12) != 0) {
++            return VIDEO_DECODER_ERROR_OTHER;
++        }
++        jniContext->native_window_width = displayed_width;
++        jniContext->native_window_height = displayed_height;
++        result = ANativeWindow_lock(jniContext->native_window, &native_window_buffer, nullptr);
++    }
++    if (result || native_window_buffer.bits == nullptr) {
+         LOGE("kJniStatusANativeWindowError");
+         return VIDEO_DECODER_ERROR_OTHER;
+     }

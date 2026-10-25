@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
@@ -181,7 +182,11 @@ fun Modifier.opticalGlass(radius: Int): Modifier {
     // Platform elevation shadows assume an opaque caster. On transparent glass their
     // tessellated interior leaks through as polygon/rectangular patches during reveal.
     // Optical rim lighting below supplies depth without an opaque shadow caster.
-    return this.clip(shape)
+    return this.drawWithContent {
+        // Read at draw time too: a source can invalidate after composition but before this
+        // display list is drawn. Never expose a tinted fallback in that one-frame gap.
+        if (glassContentReady(enabled, videoBackdrop, videoFrame.value != null)) drawContent()
+    }.clip(shape)
         .onGloballyPositioned {
             view.getLocationOnScreen(location)
             origin=it.positionInRoot()+Offset(location[0].toFloat(),location[1].toFloat())

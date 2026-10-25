@@ -41,6 +41,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
@@ -181,8 +184,7 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
     }
     fun togglePlayback() {
         endHold()
-        if (player.isPlaying) player.pause()
-        else { if (player.playbackState == Player.STATE_ENDED) host.seekTo(0); player.play() }
+        host.togglePlayback()
     }
     fun finishScrub(commit: Boolean) {
         if (scrubbing && commit && player.isCurrentMediaItemSeekable && player.duration > 0) {
@@ -199,16 +201,13 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
         timeMeasurer.measure(timeTemplate, style = timeStyle, maxLines = 1, softWrap = false).size.width.toDp() + 2.dp
     }
     VideoGlassProvider(videoView?.videoSurfaceView as? SurfaceView, playing,
-        active = !inPip && (controls || scrubbing || holdSpeed != null || dialog != null || hint != null), enabled = glass,
+        active = !inPip && foreground && (controls || scrubbing || holdSpeed != null || dialog != null || hint != null || host.opticalSeekHandoff.running), enabled = glass,
         videoWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).toInt(), videoHeight = videoSize.height, contentRevision = glassContentRevision,
-        videoFrameToken = host::presentedFrameToken, videoFrameRevision = host::glassFrameRevision) {
+        videoFrameToken = host::presentedFrameToken, videoFrameRevision = host::glassFrameRevision, buffering = buffering, handoff = host.opticalSeekHandoff,
+        videoExpected = !(player.playbackState == Player.STATE_READY && !player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO))) {
     val opticalReady by com.sweefl.player.core.designsystem.LocalGlassReady.current
-    var revealControls by remember { mutableStateOf(false) }
-    LaunchedEffect(controls, opticalReady) {
-        if (!controls) revealControls = false
-        else if (opticalReady) revealControls = true
-        else if (!revealControls) { delay(180); revealControls = true }
-    }
+    val revealControls = opticalReady
+    val loading = buffering || host.opticalSeekHandoff.running
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { context -> PlayerView(context).apply { this.player = player; useController = false; videoView = this } },
             modifier = Modifier.fillMaxSize(),
@@ -217,6 +216,7 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
                 it.resizeMode = if (fill && !inPip) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
             },
             onRelease = { it.player = null; videoView = null })
+        com.sweefl.player.core.designsystem.OpticalSeekCover(host.opticalSeekHandoff)
         if (!inPip && foreground && dialog == null) PlayerGestureLayer(player, locked, interactions, window,
             onHoldStart = ::startHold, onHoldEnd = ::endHold,
             onTap = { controls = if (locked) true else !controls }, onDoubleTap = { action ->
@@ -233,7 +233,8 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
             onSeekStart = { gestureScrub = true; scrubbing = true; scrub = it.toFloat(); hint = null },
             onSeekChange = { scrub = it.toFloat(); hint = if (interactions.showSeekPreview) null else "定位 ${formatDuration(it)}" },
             onSeekEnd = ::finishScrub)
-        if (buffering && !inPip) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Mint)
+        if (loading && !inPip && (!controls || !revealControls || scrubbing || locked || holdSpeed != null))
+            CircularProgressIndicator(Modifier.align(Alignment.Center), color = Mint)
         if (locked && controls && !inPip) IconButton(onClick = { locked = false; controls = true },
             modifier = Modifier.align(Alignment.CenterEnd).navigationBarsPadding().padding(20.dp)) { Icon(Icons.Rounded.LockOpen, "解锁控制") }
         if (((controls && revealControls) || scrubbing) && !locked && !inPip) {
@@ -250,7 +251,13 @@ fun PlayerScreen(player: ExoPlayer, title: String, host: PlayerHost, window: Pla
             }
             if (controls && error == null && !scrubbing && holdSpeed == null) Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { seek(-10_000) }, modifier = Modifier.size(52.dp)) { Icon(Icons.Rounded.Replay10, "后退 10 秒") }
-                FilledIconButton(onClick = ::togglePlayback, modifier = Modifier.size(70.dp)) { Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "暂停" else "播放", Modifier.size(36.dp)) }
+                FilledIconButton(onClick = ::togglePlayback, modifier = Modifier.size(70.dp).semantics {
+                    if (loading) contentDescription = if (host.desiredPlayWhenReady) "正在加载，暂停" else "正在加载，继续播放"
+                }) {
+                    if (loading) CircularProgressIndicator(Modifier.size(32.dp), color = Mint, strokeWidth = 3.dp)
+                    else Icon(if (host.desiredPlayWhenReady) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        if (host.desiredPlayWhenReady) "暂停" else "播放", Modifier.size(36.dp))
+                }
                 IconButton(onClick = { seek(10_000) }, modifier = Modifier.size(52.dp)) { Icon(Icons.Rounded.Forward10, "快进 10 秒") }
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(16.dp)) {

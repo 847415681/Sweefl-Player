@@ -13,3 +13,7 @@ gradlew text eol=lf
 *.jpg binary
 *.jar binary
 *.apk binary
+*.aar binary
+# This source kit has byte-for-byte archive/provenance checks.
+third-party/nextlib/** -text whitespace=cr-at-eol
+third-party/nextlib/*.patch -whitespace

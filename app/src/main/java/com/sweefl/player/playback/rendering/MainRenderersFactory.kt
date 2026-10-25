@@ -92,6 +92,16 @@ internal class SdrOnlyFfmpegRenderer(private val delegate: Renderer,
         delegate.enable(configuration, formats, stream, positionUs, joining,
             mayRenderStartOfStream, startPositionUs, offsetUs, mediaPeriodId)
     }
+    // Kotlin interface delegation does not forward inherited Java default methods.
+    // ExoPlayer grants this after enabling a paused renderer: swallowing it leaves the
+    // restored Surface black until playback starts, even though decoding is ready.
+    override fun enableMayRenderStartOfStream() = delegate.enableMayRenderStartOfStream()
+    override fun setPlaybackSpeed(currentPlaybackSpeed: Float, targetPlaybackSpeed: Float) =
+        delegate.setPlaybackSpeed(currentPlaybackSpeed, targetPlaybackSpeed)
+    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+        delegate.getDurationToProgressUs(positionUs, elapsedRealtimeUs)
+    override fun release() = delegate.release()
+
     override fun resetPosition(positionUs: Long) {
         evidence.reset()
         delegate.resetPosition(positionUs)

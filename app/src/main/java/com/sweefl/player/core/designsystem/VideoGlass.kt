@@ -24,14 +24,19 @@ class GlassCapturePolicy(val modeName: String, val intervalNanos: (Float) -> Lon
 val LocalGlassCapturePolicy = staticCompositionLocalOf { GlassCapturePolicy("FPS_60", { 16_666_666L }) }
 internal val LocalGlassVideoFrame = staticCompositionLocalOf<State<GlassVideoFrame?>> { mutableStateOf(null) }
 
+internal fun glassContentReady(enabled: Boolean, videoBackdrop: Boolean, frameAvailable: Boolean): Boolean =
+    !enabled || Build.VERSION.SDK_INT < 33 || !videoBackdrop || frameAvailable
+
 /** Shared SDR decoration; the primary SurfaceView remains the native video/HDR renderer. */
 @Composable
 fun VideoGlassProvider(source: SurfaceView?, playing: Boolean, active: Boolean, enabled: Boolean,
-    videoWidth: Int = 0, videoHeight: Int = 0, contentRevision: Long = 0L,
+    videoWidth: Int = 0, videoHeight: Int = 0, contentRevision: Long = 0L, buffering: Boolean = false,
     videoFrameToken: (Long) -> Int = { -1 }, videoFrameRevision: () -> Long = { -1L },
+    handoff: OpticalSeekHandoff? = null, videoExpected: Boolean = true,
     content: @Composable () -> Unit) {
     val frame = remember(source) { mutableStateOf<GlassVideoFrame?>(null) }
     val currentPlaying = rememberUpdatedState(playing)
+    val currentBuffering = rememberUpdatedState(buffering)
     val currentActive = rememberUpdatedState(active)
     val encodedSize = rememberUpdatedState(videoWidth to videoHeight)
     val revision = rememberUpdatedState(contentRevision)
@@ -40,11 +45,13 @@ fun VideoGlassProvider(source: SurfaceView?, playing: Boolean, active: Boolean, 
     val refreshMode = rememberUpdatedState(LocalGlassCapturePolicy.current)
     val captureRef = remember { arrayOfNulls<GlassCapture>(1) }
     val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(source, enabled, owner) {
+    DisposableEffect(source, enabled, owner, videoExpected) {
         var capture: GlassCapture? = null
         fun start() {
-            if (capture == null && source != null && enabled && Build.VERSION.SDK_INT >= 33) {
-                capture = GlassCapture(source, { currentActive.value }, { currentPlaying.value }, { refreshMode.value }, { encodedSize.value }, { revision.value }, { cutoffNs -> frameToken.value(cutoffNs) }, { frameRevision.value() }) { frame.value = it }
+            if (capture == null && source != null && enabled && videoExpected && Build.VERSION.SDK_INT >= 33) {
+                capture = GlassCapture(source, { currentActive.value || handoff?.running == true }, { currentPlaying.value }, { currentBuffering.value }, { refreshMode.value }, { encodedSize.value }, { revision.value }, { cutoffNs -> frameToken.value(cutoffNs) }, { frameRevision.value() },
+                    onInvalidated = { handoff?.cancel(completePending = true) },
+                    onEligible = { handoff?.accept(it, true) }) { frame.value = it }
                 captureRef[0] = capture
                 capture?.start()
             }
@@ -64,16 +71,42 @@ fun VideoGlassProvider(source: SurfaceView?, playing: Boolean, active: Boolean, 
         if (owner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) start()
         onDispose { owner.lifecycle.removeObserver(observer); stop() }
     }
-    SideEffect { captureRef[0]?.onPlaybackChanged() }
-    val ready = remember(frame, enabled) { derivedStateOf { !enabled || Build.VERSION.SDK_INT < 33 || frame.value != null } }
-    CompositionLocalProvider(LocalGlassReady provides ready, LocalGlassVideoFrame provides frame, LocalGlassEnabled provides enabled, LocalVideoGlassBackdrop provides true, content = content)
+    val view = androidx.compose.ui.platform.LocalView.current
+    SideEffect {
+        captureRef[0]?.onPlaybackChanged()
+        handoff?.supported = enabled && Build.VERSION.SDK_INT >= 33 && view.isHardwareAccelerated && source != null
+        handoff?.visible = active && frame.value != null
+        if (handoff?.phase == 1) handoff.pin(frame.value)
+        if ((!enabled || !active) && handoff?.running == true) handoff.cancel(completePending = true)
+    }
+    val phase = handoff?.phase ?: 0
+    val epoch = handoff?.epoch ?: 0L
+    DisposableEffect(view, handoff, phase, epoch) {
+        val callback = Runnable { view.post { handoff?.committed(epoch, phase) } }
+        if (Build.VERSION.SDK_INT >= 29 && view.isHardwareAccelerated && phase in listOf(2, 4, 5, 6)) {
+            view.viewTreeObserver.registerFrameCommitCallback(callback)
+            view.invalidate()
+        }
+        onDispose {
+            if (Build.VERSION.SDK_INT >= 29 && view.viewTreeObserver.isAlive)
+                view.viewTreeObserver.unregisterFrameCommitCallback(callback)
+        }
+    }
+    DisposableEffect(handoff, source) {
+        onDispose { handoff?.cancel(completePending = true) }
+    }
+    val displayed = remember(frame, handoff) { derivedStateOf { handoff?.pinned ?: frame.value } }
+    val ready = remember(displayed, enabled, videoExpected) { derivedStateOf { glassContentReady(enabled, videoExpected, displayed.value != null) } }
+    CompositionLocalProvider(LocalGlassReady provides ready, LocalGlassVideoFrame provides displayed, LocalGlassEnabled provides enabled, LocalVideoGlassBackdrop provides videoExpected, content = content)
 }
 
 /** Main-thread scheduling/publication, one asynchronous copy in flight, no queued stale frames. */
 private class GlassCapture(private val source: SurfaceView, private val active: () -> Boolean, private val playing: () -> Boolean,
-    private val mode: () -> GlassCapturePolicy, private val encodedSize: () -> Pair<Int, Int>,
+    private val buffering: () -> Boolean, private val mode: () -> GlassCapturePolicy, private val encodedSize: () -> Pair<Int, Int>,
     private val contentRevision: () -> Long, private val frameToken: (Long) -> Int,
     private val frameRevision: () -> Long,
+    private val onInvalidated: () -> Unit,
+    private val onEligible: (GlassVideoFrame) -> Unit,
     private val publish: (GlassVideoFrame?) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private val choreographer = Choreographer.getInstance()
@@ -98,14 +131,14 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
     private var statsStartNs = System.nanoTime()
     private var generation = 0
     private var wasActive = active()
-    private var revealNotBeforeNs = System.nanoTime() + 200_000_000L
+    private var nextTransitionCopyNs = 0L
     private val layoutListener = android.view.View.OnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
         if (l != ol || t != ot || r != or || b != ob) invalidateGeometry()
     }
     private val surfaceCallback = object : android.view.SurfaceHolder.Callback {
-        override fun surfaceCreated(holder: android.view.SurfaceHolder) = invalidateGeometry()
+        override fun surfaceCreated(holder: android.view.SurfaceHolder) = invalidateGeometry(discard = true)
         override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, width: Int, height: Int) = invalidateGeometry()
-        override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = invalidateGeometry()
+        override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = invalidateGeometry(discard = true)
     }
     private val resumeTick: Runnable = Runnable { if (!stopped) choreographer.postFrameCallback(tick) }
     private val tick: Choreographer.FrameCallback = object : Choreographer.FrameCallback {
@@ -114,8 +147,8 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
             if (rendererRevision != frameRevision()) {
                 rendererRevision = frameRevision()
                 generation++; lastFrameToken = -1; settlingCopies = 2
-                revealNotBeforeNs = System.nanoTime() + 200_000_000L
-                publish(null); nextFrameNs = 0L
+                nextTransitionCopyNs = 0L
+                nextFrameNs = 0L
             }
             // Phase-based deadlines avoid reducing 60fps to 48fps on a 144Hz display.
             if (active() && frameTimeNanos + 1_000_000L >= nextFrameNs && capture()) {
@@ -134,10 +167,19 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
         source.holder.addCallback(surfaceCallback)
         choreographer.postFrameCallback(tick)
     }
-    private fun invalidateGeometry() {
+    private fun invalidateGeometry(discard: Boolean = false) {
         if (stopped) return
-        generation++; lastFrameToken = -1; settlingCopies = 2; front = null; back = null; publish(null); nextFrameNs = 0L
-        revealNotBeforeNs = System.nanoTime() + 200_000_000L
+        onInvalidated()
+        generation++; lastFrameToken = -1; settlingCopies = 2; nextFrameNs = 0L
+        if (discard || source.width <= 0 || source.height <= 0) {
+            front = null; back = null; publish(null)
+        } else {
+            source.getLocationOnScreen(location)
+            front = front?.let { GlassVideoFrame(it.bitmap, Offset(location[0].toFloat(), location[1].toFloat()),
+                source.width.toFloat(), source.height.toFloat()) }
+            publish(front)
+        }
+        nextTransitionCopyNs = 0L
         burstUntilNs = System.nanoTime() + 500_000_000L
         handler.removeCallbacks(resumeTick); choreographer.removeFrameCallback(tick)
         choreographer.postFrameCallback(tick)
@@ -147,13 +189,15 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
         if (wasActive != nowActive) {
             wasActive = nowActive; nextFrameNs = 0L
             // Hidden playback advances independently. Never reveal its retained old sample.
-            if (playing()) { generation++; lastFrameToken = -1; publish(null) }
+            if (nowActive && playing()) { generation++; lastFrameToken = -1; publish(null) }
         }
         if (!stopped && previousRevision != contentRevision()) {
             previousRevision = contentRevision()
-            // Reject copies started before a seek/first-frame signal. Keep reusable buffers,
-            // but never leave an old picture visible while waiting for its replacement.
-            generation++; lastFrameToken = -1; settlingCopies = 2; publish(null); nextFrameNs = 0L
+            // Timeline changes do not invalidate the geometry of the visible Surface.
+            // Retain its last observation only until a fresh current-generation copy arrives;
+            // independently reject all copies initiated before this revision.
+            generation++; lastFrameToken = -1; settlingCopies = 2; nextFrameNs = 0L
+            nextTransitionCopyNs = 0L
             burstUntilNs = System.nanoTime() + 500_000_000L
             handler.removeCallbacks(resumeTick); choreographer.removeFrameCallback(tick)
             choreographer.postFrameCallback(tick)
@@ -183,14 +227,20 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
         // metadata deadline, then deduplicate actual eligible frames instead of decoder counts.
         val displayHz = source.display?.refreshRate?.takeIf { it.isFinite() && it > 0f } ?: 60f
         val settledAt = System.nanoTime() - (1_000_000_000.0 / displayHz.coerceIn(30f, 240f)).toLong()
-        // A submission is not a compositor latch fence. During a seek burst retain
-        // transparent chrome, never expose an intermediate capture as the new backdrop.
-        if (System.nanoTime() < revealNotBeforeNs) return false
         val requestRevision = frameRevision()
         val token = frameToken(settledAt)
-        if (requestRevision != rendererRevision || requestRevision != frameRevision() || token < 0) return false
-        // Only two settling retries per invalidation; a polling burst never bypasses eligibility.
-        if (token == lastFrameToken && settlingCopies <= 0) return false
+        if (requestRevision != rendererRevision || requestRevision != frameRevision()) return false
+        // Decoder evidence may be absent for seconds while buffering. The Surface still
+        // has a displayed image: sample that image afresh instead of replacing optics with
+        // a tinted rectangle. This is display-backdrop sampling, not a claim that the
+        // requested seek position has already rendered. Never republish a cached old epoch.
+        val nowNs = System.nanoTime()
+        // Metadata precedes Surface presentation; briefly sample through that handoff.
+        val settlingBurst = nowNs < burstUntilNs
+        val transitionCopy = token < 0 || (buffering() && token == lastFrameToken)
+        if (transitionCopy && !settlingBurst && nowNs < nextTransitionCopyNs) return false
+        if (!transitionCopy && !settlingBurst && token == lastFrameToken && settlingCopies <= 0) return false
+        if (transitionCopy) nextTransitionCopyNs = nowNs + 66_666_667L
         source.getLocationOnScreen(location)
         // PixelCopy's source rectangle uses buffer pixels, not SurfaceView layout pixels.
         // Copy the whole buffer, then map it to the whole displayed SurfaceView (also when
@@ -218,6 +268,7 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
         val surface = source.holder.surface
         val startedNs = System.nanoTime()
         val requestGeneration = generation
+        val requestContentRevision = contentRevision()
         copying = true
         copyHandler.post {
             if (!stopped) {
@@ -226,9 +277,10 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
                         copying = false
                         if (!stopped && result == PixelCopy.SUCCESS) {
                             source.getLocationOnScreen(location)
-                            if (requestGeneration != generation || requestRevision != frameRevision() ||
+                            if (!active() || !source.isAttachedToWindow || requestContentRevision != contentRevision() ||
+                                requestGeneration != generation || requestRevision != frameRevision() ||
                                 !surface.isValid || surface !== source.holder.surface) {
-                                publish(null)
+                                // Drop obsolete work; never erase the current observation.
                                 handler.removeCallbacks(resumeTick); choreographer.removeFrameCallback(tick)
                                 choreographer.postFrameCallback(tick)
                                 return@request
@@ -239,10 +291,13 @@ private class GlassCapture(private val source: SurfaceView, private val active: 
                                 invalidateGeometry()
                                 return@request
                             }
-                            if (lastFrameToken >= 0 && settlingCopies > 0) settlingCopies--
-                            lastFrameToken = token
+                            if (!transitionCopy) {
+                                if (lastFrameToken >= 0 && settlingCopies > 0) settlingCopies--
+                                lastFrameToken = token
+                            }
                             back = front; front = target
                             publish(target)
+                            if (token >= 0 && !buffering() && settlingCopies <= 0) onEligible(target)
                             if (mode().diagnostics) {
                                 val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000.0
                                 samples++; totalCopyMs += elapsedMs; maxCopyMs = max(maxCopyMs, elapsedMs)

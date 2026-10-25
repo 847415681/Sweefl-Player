@@ -14,6 +14,13 @@ def fresh(pred):
   if pred(s):return s
   time.sleep(.2)
  raise AssertionError(s)
+def wait_seek_finished(tag):
+ end=time.monotonic()+20
+ while time.monotonic()<end:
+  t=ui(tag+'-settled')
+  if find(t,'播放') is not None:return t
+  time.sleep(.1)
+ raise AssertionError(tag+' seek handoff did not finish')
 results=[]
 for mode,gpu in [('AUTO',False),('AUTO',True),('FFMPEG',False)]:
  tag=mode+('-gpu' if gpu else '-native')
@@ -40,7 +47,7 @@ for mode,gpu in [('AUTO',False),('AUTO',True),('FFMPEG',False)]:
   if step<2:
    old=snapshot()['positionMs'];tap(t,'快进 10 秒')
    fresh(lambda s:not s['isPlaying'] and s['positionMs']>=old+9900)
-   time.sleep(.15)
+   wait_seek_finished(tag+'-'+str(step))
  # Exercise queued seeks without waiting for intermediate screenshots.
  t=ui(tag+'-rapid');back=find(t,'后退 10 秒');forward=find(t,'快进 10 秒')
  if back is None:back=find(t,'快退 10 秒')
@@ -49,6 +56,7 @@ for mode,gpu in [('AUTO',False),('AUTO',True),('FFMPEG',False)]:
  x1,y1,x2,y2=bounds(back);u1,v1,u2,v2=bounds(forward)
  input_cmd(f'tap {(x1+x2)//2} {(y1+y2)//2}; input tap {(x1+x2)//2} {(y1+y2)//2}; input tap {(u1+u2)//2} {(v1+v2)//2}')
  fresh(lambda s:not s['isPlaying'] and 10000<=s['positionMs']<20000)
+ wait_seek_finished(tag+'-rapid')
  p=screenshot(tag+'-rapid-final');im=np.array(Image.open(p).convert('RGB')).astype(float)
  glass=im[int(b+(d-b)*.22):int(b+(d-b)*.34),int(a+(c-a)*.35):int(a+(c-a)*.65)].mean((0,1))
  record(tag+' rapid seeks converge green',glass[1]-min(glass)>50,glass.tolist())

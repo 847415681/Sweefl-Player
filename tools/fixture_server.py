@@ -4,7 +4,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-p=argparse.ArgumentParser(); p.add_argument('--root',required=True); p.add_argument('--log',required=True); p.add_argument('--port',type=int,default=8765); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--root',required=True); p.add_argument('--log',required=True); p.add_argument('--port',type=int,default=8765); p.add_argument('--chunk-delay',type=float,default=0); p.add_argument('--seek-delay',type=float,default=0); a=p.parse_args()
 root=Path(a.root).resolve(); log=Path(a.log); log.parent.mkdir(parents=True,exist_ok=True)
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -27,6 +27,7 @@ class Handler(BaseHTTPRequestHandler):
         if match:
             start=int(match[1]); end=min(int(match[2]) if match[2] else end,end); status=206
             if start>=size or end<start: self.send_error(416); return
+        if start > 0 and a.seek_delay > 0: time.sleep(a.seek_delay)
         self.send_response(status)
         mime={'.m3u8':'application/vnd.apple.mpegurl','.mpd':'application/dash+xml','.ts':'video/mp2t','.m4s':'video/iso.segment'}.get(file.suffix,mimetypes.guess_type(file)[0] or 'application/octet-stream')
         self.send_header('Content-Type',mime); self.send_header('Accept-Ranges','bytes'); self.send_header('Content-Length',str(end-start+1))
@@ -39,7 +40,8 @@ class Handler(BaseHTTPRequestHandler):
                     while remaining:
                         chunk=f.read(min(262144,remaining))
                         if not chunk: break
-                        self.wfile.write(chunk); remaining-=len(chunk)
+                        self.wfile.write(chunk); self.wfile.flush(); remaining-=len(chunk)
+                        if a.chunk_delay > 0: time.sleep(a.chunk_delay)
             except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError): pass
 print(f'Fixture server 127.0.0.1:{a.port}',flush=True)
 ThreadingHTTPServer(('127.0.0.1',a.port),Handler).serve_forever()

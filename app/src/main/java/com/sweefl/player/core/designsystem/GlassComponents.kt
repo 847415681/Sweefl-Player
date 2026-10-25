@@ -18,6 +18,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.platform.LocalFocusManager
+import kotlinx.coroutines.delay
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.draw.alpha
@@ -132,20 +138,50 @@ fun GlassDialog(onDismissRequest: () -> Unit, title: @Composable () -> Unit,
     val backdropUnderlay = LocalGlassVideoFrame.current
     Dialog(onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         DialogBackdropProvider(backdropWindow, backdropUnderlay) { reportGlassBounds ->
-        CompositionLocalProvider(LocalGlassTextSurface provides true, LocalInsideGlass provides true) {
+        val backdropReady by LocalGlassReady.current
+        var captureTimedOut by remember { mutableStateOf(false) }
+        val focusManager = LocalFocusManager.current
+        LaunchedEffect(backdropReady) {
+            captureTimedOut = false
+            if (!backdropReady) {
+                focusManager.clearFocus(force = true)
+                delay(1500)
+                captureTimedOut = true
+            }
+        }
+        val fallback = !backdropReady && captureTimedOut
+        val visible = backdropReady || fallback
+        val hiddenInput = if (visible) Modifier else Modifier
+            .clearAndSetSemantics { }
+            .focusProperties { canFocus = false }
+            .onPreviewKeyEvent { true }
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                }
+            }
+        CompositionLocalProvider(LocalGlassTextSurface provides true, LocalInsideGlass provides true,
+            LocalGlassEnabled provides (LocalGlassEnabled.current && !fallback)) {
             BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), contentAlignment = Alignment.Center) {
                 val tight = maxHeight < 220.dp
                 Box(Modifier.matchParentSize().pointerInput(Unit) { detectTapGestures(onTap = { dismiss() }) })
-                Column(Modifier.padding(if (tight) 4.dp else if (wide) 12.dp else 20.dp)
+                Column(Modifier.alpha(if (visible) 1f else 0f).then(hiddenInput)
+                     .padding(if (tight) 4.dp else if (wide) 12.dp else 20.dp)
                     .widthIn(max = 560.dp).fillMaxWidth()
                      .onGloballyPositioned { coordinates ->
                          val origin = coordinates.positionOnScreen()
                          reportGlassBounds(Rect(origin.x, origin.y,
                              origin.x + coordinates.size.width, origin.y + coordinates.size.height))
                      }
-                     .glass(32).glassContentContrast()
+                     .then(if (fallback) Modifier.background(Color(0xFF172331), RoundedCornerShape(32.dp)) else Modifier)
+                      .glass(32).glassContentContrast()
                     .pointerInput(Unit) { detectTapGestures(onTap = {}) }
                     .padding(if (tight) 8.dp else if (wide) 16.dp else 22.dp)) {
+                    if (fallback) {
+                        Text("玻璃背景暂不可用，已显示普通面板", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(4.dp))
+                    }
                     if (!tight) {
                         ProvideTextStyle(if (wide) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall, title)
                         Spacer(Modifier.height(if (wide) 10.dp else 16.dp))

@@ -3,8 +3,8 @@ import time
 from device_lab import verify_device,launch,adb,OUT
 from ui_lab import ui,tap,find,screenshot
 verify_device()
-for name,path in [('mp4','synthetic/avc1080.mp4'),('hls','synthetic/hls/index.m3u8'),('dash','synthetic/dash/index.mpd')]:
- launch(path,extra=('--ez','keepControls','true'),key='release-'+name)
+for name,path,mode in [('mp4','synthetic/avc1080.mp4','AUTO'),('hls','synthetic/hls/index.m3u8','AUTO'),('dash','synthetic/dash/index.mpd','AUTO'),('ffmpeg','synthetic/seek-epoch-rgb.mp4','FFMPEG')]:
+ launch(path,mode=mode,extra=('--ez','keepControls','true'),key='release-'+name)
  time.sleep(3);t=ui(name+'-playing');assert find(t,'暂停') is not None
  # Release ignores debug keepControls; revealing controls can consume the first tap.
  for attempt in range(4):

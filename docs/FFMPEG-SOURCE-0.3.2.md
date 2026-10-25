@@ -29,6 +29,12 @@ Use FFmpeg 6.0 source with the **Nextlib-specific integration/build scripts** fr
 
 No source build, app build or device operation was performed for this kit. The inspected dependency AAR has SHA-256 `f18b041a8fe823f86b23af6270f1ddd617036dff5753edf7b2a21ed6d806ca11`. No claim is made that the downloaded sources reproduce that AAR, that the supplied commit is independently attested as its publisher's build commit, or that a rebuilt library is byte-identical. Original publisher build logs, original input hashes, fully pinned host toolchain, binary/source attestation and a verified rebuild are **not available in this kit**. It is not an offline SDK/Gradle/Maven distribution. Those limitations must not be hidden when describing source completeness or provenance.
 
+## Sweefl native-window correction
+
+The current application uses a local Nextlib AAR with an arm64 JNI-only correction. The original Java classes and all FFmpeg shared libraries are byte-identical to the inspected upstream AAR; only `jni/arm64-v8a/libmedia3ext.so` changes. The patched AAR SHA-256 is `bcd338efafe7186f20a75885a06b0a3d9c3d7a5f459997628820ffd300dde97e`.
+
+The [canonical patch](<../third-party/nextlib/native-window.patch>) removes a cached JNI local Surface reference, reacquires the current native window on each render, balances native references, and retries an abandoned-window lock once without falsely reporting a dropped paused frame as presented. The [rebuild script](<../third-party/nextlib/rebuild_native_adapter.py>) and [build instructions](<../third-party/nextlib/NATIVE-WINDOW-PATCH.md>) preserve the pristine source kit and verify that all other AAR members remain unchanged. This native adapter was built with NDK r25c; this does not establish a reproducible source build of the upstream FFmpeg binaries. Device regression results are documented separately.
+
 ## Playback boundary
 
 This inclusion is Android Nextlib/FFmpeg. Windows LAV Filters, MPC-HC/MPC-BE and their Windows playback cores are **not included or reused** by this kit. Their functionality must not be attributed to this Android decoder path.

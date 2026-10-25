@@ -13,6 +13,9 @@ interface PlayerHost {
     fun glassFrameRevision(): Long
     fun seekTo(positionMs: Long)
     fun seekBasePosition(): Long
+    val opticalSeekHandoff: com.sweefl.player.core.designsystem.OpticalSeekHandoff
+    val desiredPlayWhenReady: Boolean
+    fun togglePlayback()
     val renderSettings: com.sweefl.player.domain.PlaybackRenderSettings
     val renderingStatus: kotlinx.coroutines.flow.StateFlow<com.sweefl.player.domain.PlaybackRenderStatus>?
     fun applyRenderSettings(value: com.sweefl.player.domain.PlaybackRenderSettings)

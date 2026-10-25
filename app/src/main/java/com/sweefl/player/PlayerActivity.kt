@@ -44,6 +44,9 @@ class PlayerActivity : ComponentActivity(), PlayerHost {
     override fun glassFrameRevision() = session.glassFrameRevision()
     override fun seekTo(positionMs: Long) = session.seekTo(positionMs)
     override fun seekBasePosition() = session.seekBasePosition()
+    override val opticalSeekHandoff get() = session.opticalSeekHandoff
+    override val desiredPlayWhenReady get() = session.desiredPlayWhenReady
+    override fun togglePlayback() = session.togglePlayback()
     override fun presentedFrameToken(cutoffNs: Long) = session.presentedFrameToken(cutoffNs)
     override val renderSettings get() = session.renderSettings
     override val renderingStatus get() = session.renderingStatus

@@ -43,24 +43,51 @@ class PlaybackSession(
     private var frameTracker: com.sweefl.player.domain.SubmittedFrameTracker? = null
     fun glassFrameRevision(): Long = frameTracker?.revision() ?: -1L
     private var pendingSeekPosition: Long? = null
+    private var seekSerial = 0L
     fun seekBasePosition(): Long = pendingSeekPosition ?: player?.currentPosition ?: 0L
+    val opticalSeekHandoff = com.sweefl.player.core.designsystem.OpticalSeekHandoff()
+    private var handoffPlayIntent by mutableStateOf<Boolean?>(null)
+    val desiredPlayWhenReady: Boolean get() = handoffPlayIntent ?: player?.playWhenReady ?: autoplay
+    fun togglePlayback() {
+        val engine = player ?: return
+        val ended = engine.playbackState == Player.STATE_ENDED
+        val next = if (ended) true else !desiredPlayWhenReady
+        if (ended) seekTo(0)
+        if (opticalSeekHandoff.running) handoffPlayIntent = next
+        else engine.playWhenReady = next
+    }
     fun seekTo(positionMs: Long) {
         val engine = player ?: return
         if (pendingSeekPosition == null && positionMs == engine.currentPosition) return
         pendingSeekPosition = positionMs
+        val serial = ++seekSerial
         val frames = frameTracker
         val request = frames?.requestSeek()
-        // Surface buffers can latch before Compose has cleared its previous optical layer.
-        // Invalidate first, then give the UI several display opportunities before changing
-        // the video output. Newer requests replace this one; released players are untouched.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (player === engine && (request == null || frames.revision() == request)) {
+        val performSeek: () -> Unit = {
+            if (player === engine && seekSerial == serial) {
                 if (request != null) android.os.Handler(engine.playbackLooper).post { frames.armSeek(request) }
-                pendingSeekPosition = null
                 engine.seekTo(positionMs)
                 if (request != null) android.os.Handler(engine.playbackLooper).post { frames.completeSeek(request) }
             }
-        }, 80L)
+        }
+        val wasReady = desiredPlayWhenReady
+        val finish: () -> Unit = {
+            if (player === engine && seekSerial == serial) {
+                pendingSeekPosition = null
+                val resume = handoffPlayIntent ?: wasReady
+                handoffPlayIntent = null
+                engine.playWhenReady = resume
+            }
+        }
+        if (opticalSeekHandoff.begin(performSeek, finish)) {
+            handoffPlayIntent = wasReady
+            engine.pause()
+        } else {
+            opticalSeekHandoff.cancel()
+            handoffPlayIntent = null
+            performSeek(); pendingSeekPosition = null
+            engine.playWhenReady = wasReady
+        }
     }
     fun presentedFrameToken(cutoffNs: Long): Int = frameTracker?.tokenAt(cutoffNs) ?: -1
     private var renderingPipeline by mutableStateOf<com.sweefl.player.playback.rendering.PlaybackRenderingPipeline?>(null)
@@ -77,7 +104,7 @@ class PlaybackSession(
     fun applyRenderSettings(value: com.sweefl.player.domain.PlaybackRenderSettings) {
         val next = normalizeRendering(value)
         if (next == renderSettings) return
-        val ready = player?.playWhenReady ?: autoplay
+        val ready = desiredPlayWhenReady
         saveProgress()
         releasePlayer()
         renderSettings = next
@@ -88,7 +115,7 @@ class PlaybackSession(
     /** A paused GPU graph may retain a framebuffer sized for the old output Surface. */
     fun onOutputConfigurationChanged() {
         if (renderSettings.mode != com.sweefl.player.domain.PlaybackRenderMode.GPU_SDR || player == null) return
-        val ready = player?.playWhenReady ?: autoplay
+        val ready = desiredPlayWhenReady
         saveProgress()
         releasePlayer()
         autoplay = ready
@@ -184,7 +211,7 @@ class PlaybackSession(
     fun changeDecodeMode(mode: String) {
         val next = PlaybackConfig.parseDecodeMode(mode)
         if (next == decodeMode) return
-        val ready = player?.playWhenReady ?: autoplay
+        val ready = desiredPlayWhenReady
         saveProgress()
         releasePlayer()
         decodeMode = next
@@ -239,7 +266,7 @@ class PlaybackSession(
         outState.putLong("position", resumeAt)
         outState.putFloat("speed", resumeSpeed)
         outState.putString("decodeMode", decodeMode)
-        outState.putBoolean("autoplay", player?.playWhenReady ?: autoplay)
+        outState.putBoolean("autoplay", desiredPlayWhenReady)
         selection?.let { outState.putBundle("selection", it.toBundle()) }
         outState.putString("subtitleUri", subtitleUri?.toString())
         outState.putString("subtitleName", subtitleName)
@@ -249,11 +276,14 @@ class PlaybackSession(
     fun stop(pickingSubtitle: Boolean, changingConfigurations: Boolean) {
         saveProgress()
         if (pickingSubtitle) player?.let { resumeAt = it.currentPosition }
-        autoplay = if (pickingSubtitle || changingConfigurations) player?.playWhenReady ?: autoplay else false
+        autoplay = if (pickingSubtitle || changingConfigurations) desiredPlayWhenReady else false
         releasePlayer()
     }
 
     fun releasePlayer() {
+        seekSerial++
+        opticalSeekHandoff.cancel()
+        handoffPlayIntent = null
         pendingSeekPosition = null
         diagnostics?.close(); diagnostics = null
         frameTracker?.close(); frameTracker = null

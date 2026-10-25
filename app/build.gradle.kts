@@ -42,7 +42,8 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.media3.exoplayer)
-    implementation(libs.nextlib.media3)
+    // Same NextLib classes/FFmpeg binaries; native Surface lifetime fix is reproducible in third-party/nextlib.
+    implementation(files("libs/nextlib-media3ext-1.8.0-0.9.0-sweefl.aar"))
     implementation(libs.media3.hls)
     implementation(libs.media3.dash)
     implementation(libs.media3.effect)

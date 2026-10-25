@@ -8,7 +8,13 @@ def ui(name):
     for attempt in range(3):
         remote='/data/local/tmp/sweefl-ui-'+uuid.uuid4().hex+'.xml'
         try:
-            message=adb('shell','uiautomator','dump',remote)
+            try:
+                message=adb('shell','uiautomator','dump',remote)
+            except RuntimeError as error:
+                with (OUT/'ui-dump-retries.log').open('a',encoding='utf-8') as log:
+                    log.write(f'{name}: attempt {attempt+1}: dump process failed: {error!r}\n')
+                if attempt == 2:raise
+                continue
             if 'dumped to:' not in message:
                 print('UI dump not confirmed, retry',name,attempt+1,repr(message),flush=True)
                 with (OUT/'ui-dump-retries.log').open('a',encoding='utf-8') as log:

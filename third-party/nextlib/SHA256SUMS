@@ -81,4 +81,8 @@ e80b4e42a3043bc12fa0640db4bac392d2bf770acf841360d7c8ceeeac2ec1a9  pinned-build/n
 e25d3c61fe386a67e1d79b6dbd9cd3baafa4659dd6d5d20ea4e7254ac9a4204b  prepare_source_kit.py
 58c5dc5da72bbfd3abd681a29c77e85c5d6c2b1c5bfb248dd39baea1d025a6b9  README.md
 651150a38014c138b9835f022fbf54b62d5c944aef9976501908143174e4fca3  verify_source_kit.py
-ef5a82715d25665588c291d54ae216d89849a9e85e4ed7bc7953a0d0cb34d5f6  ../../docs/FFMPEG-SOURCE-0.3.2.md
+063215b936127ee27c490a0b43b9af55ae6c3c163adccbebc43f021eda52ac94  ../../docs/FFMPEG-SOURCE-0.3.2.md
+5eccb8de09a9c97cab69fff7831b0ae8d62a778323403d5f6a0ec55f2cb98fff  rebuild_native_adapter.py
+92b640026e1fc4a4fc8af4bcccf77b7091bec71e35659a82f5e91c81abb65e1b  native-window.patch
+a9dc28e5bc8ac600512256a79d3b0f9077be584940730a2d40a6e6a8ae94736a  NATIVE-WINDOW-PATCH.md
+bcd338efafe7186f20a75885a06b0a3d9c3d7a5f459997628820ffd300dde97e  ../../app/libs/nextlib-media3ext-1.8.0-0.9.0-sweefl.aar

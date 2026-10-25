@@ -69,6 +69,17 @@ python tools/network_transport_contract_check.py
 
 测试脚本需要 Python；图像分析额外需要 numpy/Pillow，录像解码需要 FFmpeg。部分自动化依赖已授权 root，不能直接对未授权设备执行。原始设备数据不随 Git 仓库提交；公开测试结论见 [r40 说明](RELEASE-r40.md)。
 
+## r41 玻璃与原生适配层维护
+
+另一个 agent 接手先读[交接文档](AGENT-HANDOFF.md)，实现地图和已验证边界见[r41 说明](GLASS-CONTINUITY-r41.md)。
+
+- 应用已改用仓库内的[修正 Nextlib AAR](../app/libs/nextlib-media3ext-1.8.0-0.9.0-sweefl.aar)。普通应用构建不需要 NDK；不要同时加入 Maven 原 Nextlib，避免重复类或丢失 Surface 修正。
+- 只有重建 JNI 适配层需要 Windows NDK r25c。按[原生重建说明](../third-party/nextlib/NATIVE-WINDOW-PATCH.md)运行；原 Java 类和 FFmpeg 库不变。修改来源说明或原生材料后同步更新完整性清单，执行 `python third-party/nextlib/verify_source_kit.py`。
+- `glassContentReady` 同时用于上层显隐与绘制：不能让关闭效果/API<33/纯音频等待不会产生的背景。可见性必须检查实际像素及交互，不能只检查 UI 节点。
+- 跳转交接由 `OpticalSeekHandoff` 协调，并保留用户播放意图。不能用固定延迟或删除 loading 来掩盖同步问题。
+- Debug 诊断用于 `seek-epoch,surface-recreation`；Release 不写诊断文件且忽略调试 keepControls。Release 使用 `release-smoke,final-visual,modal-material,entry-material,control-visibility`；慢 UI 抓取时先暂停，避免自动隐藏造成假失败。
+- 完整构建命令：`powershell -NoProfile -ExecutionPolicy Bypass -Command "& .\build-local.ps1 -Tasks @('verify', ':app:assembleRelease')"`。只改文档或测试说明时无需重复手机回归；代码变化按影响范围选择检查。
+
 ## 修改代码
 
 先阅读[架构指南](ARCHITECTURE.md)，再按职责放置文件：规则进入 JVM 模块；查询和存储进入数据层；Android 生命周期留在入口；功能状态放 Route / ViewModel / 播放会话；渲染与用户操作放 UI。根包仅保留 Application 和两个系统入口。

@@ -60,17 +60,27 @@ internal fun View.glassOwnerWindow(): Window? {
 internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<GlassVideoFrame?>,
     content: @Composable ((ScreenRect?) -> Unit) -> Unit) {
     val dialogView = LocalView.current
-    // Capture only the filter's actual support plus the maximum optical displacement.
-    // Zero blur needs no 72dp Gaussian halo; sharp foreground remains full resolution.
-    val blurAmount = LocalGlassBlurAmount.current.coerceIn(0f, 1f)
-    val paddingPx = with(LocalDensity.current) { (blurAmount * 72f + 16f).dp.toPx() }
+    // Grow support in three bounded steps, never shrink/restart while this modal lives.
+    // A larger crop replaces the retained valid composite only after its copy completes.
+    val support = LocalGlassBlurAmount.current.coerceIn(0f, 1f) * 72f + 16f
+    val requestedPadding = when {
+        support <= 16f -> 16f
+        support <= 40f -> 40f
+        support <= 64f -> 64f
+        else -> 88f
+    }
+    var retainedPadding by remember(sourceWindow, dialogView) { mutableFloatStateOf(requestedPadding) }
+    val padding = maxOf(retainedPadding, requestedPadding)
+    SideEffect { if (retainedPadding < padding) retainedPadding = padding }
+    val paddingPx = with(LocalDensity.current) { padding.dp.toPx() }
+    val latestPadding = rememberUpdatedState(paddingPx)
     val bounds = remember(sourceWindow, dialogView) { mutableStateOf<ScreenRect?>(null) }
     val captureRef = remember(sourceWindow, dialogView) { arrayOfNulls<DialogBackdropCapture>(1) }
     val reportBounds: (ScreenRect?) -> Unit = remember(sourceWindow, dialogView) {
         { value ->
             if (bounds.value != value) {
                 bounds.value = value
-                captureRef[0]?.invalidateGeometry()
+                captureRef[0]?.invalidateCrop()
             }
         }
     }
@@ -79,12 +89,12 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
     val inheritedVideo = LocalVideoGlassBackdrop.current
     val composite = remember(sourceWindow, dialogView) { mutableStateOf<GlassVideoFrame?>(null) }
     val latestUnderlay = rememberUpdatedState(underlay)
-    DisposableEffect(sourceWindow, dialogView, owner, enabled, inheritedVideo, paddingPx) {
+    DisposableEffect(sourceWindow, dialogView, owner, enabled, inheritedVideo) {
         var capture: DialogBackdropCapture? = null
         fun start() {
             if (capture == null && enabled && Build.VERSION.SDK_INT >= 33 && sourceWindow != null) {
                 capture = DialogBackdropCapture(sourceWindow, dialogView,
-                    { latestUnderlay.value.value }, inheritedVideo, { bounds.value }, paddingPx,
+                    { latestUnderlay.value.value }, inheritedVideo, { bounds.value }, { latestPadding.value },
                     { composite.value = it }).also { captureRef[0] = it; it.start() }
             }
         }
@@ -100,7 +110,10 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
         if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) start()
         onDispose { owner.lifecycle.removeObserver(observer); stop() }
     }
-    CompositionLocalProvider(LocalGlassVideoFrame provides composite,
+    val ready = remember(composite, enabled) { derivedStateOf {
+        !enabled || Build.VERSION.SDK_INT < 33 || composite.value != null
+    } }
+    CompositionLocalProvider(LocalGlassReady provides ready, LocalGlassVideoFrame provides composite,
         LocalVideoGlassBackdrop provides true, LocalGlassBackdropIsComposite provides true,
         content = { content(reportBounds) })
 }
@@ -109,7 +122,7 @@ internal fun DialogBackdropProvider(sourceWindow: Window?, underlay: State<Glass
  * while RenderThread may still hold a shader; two output buffers plus one private UI buffer. */
 private class DialogBackdropCapture(private val source: Window, private val dialogView: View,
     private val underlay: () -> GlassVideoFrame?, private val needsVideo: Boolean,
-    private val bounds: () -> ScreenRect?, private val paddingPx: Float,
+    private val bounds: () -> ScreenRect?, private val paddingPx: () -> Float,
     private val publish: (GlassVideoFrame?) -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("SweeflDialogCopy").apply { start() }
@@ -122,12 +135,18 @@ private class DialogBackdropCapture(private val source: Window, private val dial
     private val tick = Runnable { capture() }
     private var geometryRevision = 0L
     fun invalidateGeometry() {
-        geometryRevision++
         publish(null)
+        invalidateCrop()
+    }
+    fun invalidateCrop() {
+        geometryRevision++
         main.removeCallbacks(tick)
         if (!stopped && !copying) main.post(tick)
     }
     private var observedDecor: View? = null
+    private data class SourceGeometry(val decor: View, val modal: Window,
+        val width: Int, val height: Int, val x: Int, val y: Int)
+    private var lastSourceGeometry: SourceGeometry? = null
     private val sourceLayoutListener = View.OnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
         if (l != ol || t != ot || r != or || b != ob) invalidateGeometry()
     }
@@ -147,17 +166,29 @@ private class DialogBackdropCapture(private val source: Window, private val dial
         val decor = source.peekDecorView()
         val modal = dialogView.glassOwnerWindow()
         if (decor == null || modal == null || modal === source || !decor.isAttachedToWindow ||
-            decor.width < 1 || decor.height < 1) { schedule(); return }
+            decor.width < 1 || decor.height < 1) { publish(null); lastSourceGeometry = null; schedule(); return }
+        val width = decor.width; val height = decor.height
+        val originArray = IntArray(2); decor.getLocationOnScreen(originArray)
+        val geometry = SourceGeometry(decor, modal, width, height, originArray[0], originArray[1])
+        if (lastSourceGeometry != geometry) {
+            lastSourceGeometry = geometry
+            geometryRevision++
+            publish(null)
+            if (observedDecor !== decor) {
+                observedDecor?.removeOnLayoutChangeListener(sourceLayoutListener)
+                observedDecor = decor
+                decor.addOnLayoutChangeListener(sourceLayoutListener)
+            }
+        }
         val base = underlay()
-        if (needsVideo && base == null) { publish(null); schedule(); return }
+        if (needsVideo && base == null) { schedule(); return }
         val dialogBounds = bounds()
         if (dialogBounds == null || dialogBounds.isEmpty ||
             !listOf(dialogBounds.left, dialogBounds.top, dialogBounds.right, dialogBounds.bottom).all { it.isFinite() }) {
-            publish(null); schedule(); return
+            schedule(); return
         }
         val requestRevision = geometryRevision
-        val width = decor.width; val height = decor.height
-        val originArray = IntArray(2); decor.getLocationOnScreen(originArray)
+        val paddingPx = paddingPx()
         // Window PixelCopy rect is decor-local; scene mapping remains screen-space.
         // Round outward to keep all 72dp (three maximum Gaussian radii) at fractional bounds.
         val crop = Rect(
@@ -165,7 +196,7 @@ private class DialogBackdropCapture(private val source: Window, private val dial
             floor(dialogBounds.top - paddingPx - originArray[1]).toInt().coerceIn(0, height),
             ceil(dialogBounds.right + paddingPx - originArray[0]).toInt().coerceIn(0, width),
             ceil(dialogBounds.bottom + paddingPx - originArray[1]).toInt().coerceIn(0, height))
-        if (crop.isEmpty) { publish(null); schedule(); return }
+        if (crop.isEmpty) { schedule(); return }
         val origin = Offset((originArray[0] + crop.left).toFloat(), (originArray[1] + crop.top).toFloat())
         // One bitmap pixel per window pixel: zero blur keeps the original detail.
         val targetWidth = crop.width()
@@ -179,7 +210,7 @@ private class DialogBackdropCapture(private val source: Window, private val dial
                 ?: Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).also { ui = it }
             output = back?.takeIf { it.width == targetWidth && it.height == targetHeight }
                 ?: Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).also { back = it }
-        } catch (_: OutOfMemoryError) { publish(null); stop(); return }
+        } catch (_: OutOfMemoryError) { stop(); return }
         // Snapshot inherited frame on the publication thread before PixelCopy; do not keep
         // reading a reusable video bitmap from the worker while the parent capture rotates it.
         val underlayCanvas = Canvas(output)
@@ -216,12 +247,18 @@ private class DialogBackdropCapture(private val source: Window, private val dial
                                 (!needsVideo || underlay() != null)) {
                                 back = front; front = output
                                 publish(GlassVideoFrame(output, origin, targetWidth.toFloat(), targetHeight.toFloat()))
-                            } else publish(null)
+                            } else if (source.peekDecorView() !== decor || !decor.isAttachedToWindow ||
+                                decor.width != width || decor.height != height || currentModal !== modal ||
+                                !currentOrigin.contentEquals(originArray)) {
+                                // An obsolete crop/dim/underlay result is merely discarded.
+                                // Only invalid source mapping makes the displayed sample unsafe.
+                                publish(null)
+                            }
                             schedule()
                         }
                     }
-                } else main.post { copying = false; if (!stopped) { publish(null); schedule() } }
+                } else main.post { copying = false; if (!stopped) schedule() }
             }, worker)
-        } catch (_: IllegalArgumentException) { copying = false; publish(null); schedule() }
+        } catch (_: IllegalArgumentException) { copying = false; schedule() }
     }
 }

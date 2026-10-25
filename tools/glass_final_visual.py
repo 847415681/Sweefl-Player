@@ -22,7 +22,11 @@ for amount in (0,50):
   input_cmd(f'swipe {(a+c)//2} {int(b+.8*(d-b))} {(a+c)//2} {int(b+.3*(d-b))} 400')
  else:raise AssertionError('blur slider missing')
  t=ui('blur-confirm'+str(amount));assert find(t,str(amount)+'%') is not None
- input_cmd('keyevent 4');t=controls('ready'+str(amount));tap(t,'切换横竖屏');t=controls('landscape'+str(amount))
+ input_cmd('keyevent 4');t=controls('ready'+str(amount))
+ root_bounds=bounds(next(t.iter('node')))
+ if root_bounds[2]-root_bounds[0] < root_bounds[3]-root_bounds[1]:tap(t,'切换横竖屏')
+ t=controls('landscape'+str(amount));root_bounds=bounds(next(t.iter('node')))
+ assert root_bounds[2]-root_bounds[0] > root_bounds[3]-root_bounds[1], 'RGB ROI requires landscape'
  # Pause before recording, then queue repeated seeks and reveal without test-only keepControls.
  for attempt in range(5):
   if find(t,'播放') is not None:break

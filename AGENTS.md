@@ -2,7 +2,8 @@
 
 - 目标：Android ARMv8-A / arm64-v8a，原生 Kotlin + Compose + Media3。MX Player 作为交互参考，液态玻璃作为视觉方向。MPC-HC 在相邻目录作为功能参考，当前未复用其 Windows 核心。
 - 工作区已有隔离 Android 工具。优先通过 `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-local.ps1` 构建，并检查单元测试和 lint。
-- 用户明确说明测试手机的 shell 已授予 root，并授权后续用 root 自动执行开发/测试操作。本次 `adb shell su -c id` 已验证 `uid=0(root)`（KernelSU）。连接的型号为 2604FRK1EC，Android 16，arm64-v8a；每次操作仍先用 `adb devices -l` 确认当前目标。
+- 用户已授权本项目使用已授予 root 的测试手机进行开发/测试操作。r41 实际验证设备为 Redmi K20 Pro（raphael），Android 15/API35，arm64-v8a，序列号 5ba8ddbb；旧文档中的 2604FRK1EC/Android 16 是更早设备记录。每次操作先用 `adb devices -l` 和必要的 root 检查确认实际目标，不按旧记录推断。
+- 新 agent 接手先读 [交接入口](docs/AGENT-HANDOFF.md)，保留已验证的玻璃开关就绪规则、跳转 loading 和本地 Nextlib 原生窗口修正。
 - 普通 `adb install` 被系统 USB 安装限制拒绝时，可将本项目 APK 推送到 `/data/local/tmp/`，再用 `su -c 'pm install -r ...'` 安装。无需为相同的、已授权的项目测试操作反复询问。
 - root 授权用于本项目安装、调试和测试，不代表可删除用户媒体、清空其他应用、修改全局安全设置或执行无关操作。保留现有应用数据，测试媒体使用明确标识的独立文件。
 - 测试结论需区分构建、静态检查与真机验证；不得把一种手机或一种编码的结果泛化为全部设备/格式。
